@@ -25,7 +25,7 @@ function Tile({ cam, mode, playback, editing, onRemove }: { cam: Camera; mode: M
       {cam.status === "OFFLINE" && mode === "live" ? (
         <div className="grid h-full place-items-center text-xs text-zinc-600">OFFLINE</div>
       ) : showPlayback ? (
-        playback ? <LivePlayer go2rtcUrl={playback.go2rtcUrl} stream={playback.stream} mode="mse" /> : <div className="grid h-full place-items-center text-xs text-zinc-600">รอโหลดย้อนหลัง…</div>
+        playback ? <LivePlayer go2rtcUrl={playback.go2rtcUrl} stream={playback.stream} mode="mse" controls /> : <div className="grid h-full place-items-center text-xs text-zinc-600">รอโหลดย้อนหลัง…</div>
       ) : (
         <LivePlayer go2rtcUrl={cam.streams.go2rtcUrl} stream={cam.streams.sub} />
       )}

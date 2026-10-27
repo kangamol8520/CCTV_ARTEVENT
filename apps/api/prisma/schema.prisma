@@ -115,6 +115,8 @@ model Camera {
   /// Overrides for protocol RTSP (full path incl. leading slash)
   mainStreamPath String?   @db.NVarChar(256)
   subStreamPath  String?   @db.NVarChar(256)
+  /// When true the grid sub-stream is a scaled-down H.264 transcode (for cams with no real sub)
+  subTranscode   Boolean   @default(false)
   nvrId          Int?
   nvr            Nvr?      @relation(fields: [nvrId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   /// 1-based channel number on the NVR (needed for NVR_CHANNEL and for playback)

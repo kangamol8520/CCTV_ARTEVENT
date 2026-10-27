@@ -16,8 +16,21 @@ function rtspUrl(host: string, port: number, path: string, user?: string | null,
   return `rtsp://${auth}${host}:${port}${path.startsWith("/") ? path : "/" + path}`;
 }
 
+/** A scaled-down H.264 transcode of an RTSP source, for grid tiles of cameras with no real
+ *  sub-stream. go2rtc spawns the ffmpeg process only while someone is watching. */
+export function transcodeSub(mainRtsp: string): string {
+  return `ffmpeg:${mainRtsp}#video=h264#width=640`;
+}
+
 /** Returns [mainSource, subSource] or null when the camera cannot be streamed yet. */
 export async function buildSources(cam: CameraWithNvr): Promise<{ main: string; sub: string } | null> {
+  const src = await buildRawSources(cam);
+  if (!src) return null;
+  if (cam.subTranscode && src.main.startsWith("rtsp://")) src.sub = transcodeSub(src.main);
+  return src;
+}
+
+async function buildRawSources(cam: CameraWithNvr): Promise<{ main: string; sub: string } | null> {
   switch (cam.protocol) {
     case "NVR_CHANNEL": {
       if (!cam.nvr || !cam.nvrChannel) return null;

@@ -52,7 +52,7 @@ export function Playback() {
             </button>
           ))}
         </div>
-        <div className="min-w-0 flex-1 rounded bg-black">{play ? <LivePlayer go2rtcUrl={play.go2rtcUrl} stream={play.stream} mode="mse" /> : <div className="flex h-full items-center justify-center text-sm text-zinc-600">เลือกกล้องและช่วงเวลา</div>}</div>
+        <div className="min-w-0 flex-1 rounded bg-black">{play ? <LivePlayer go2rtcUrl={play.go2rtcUrl} stream={play.stream} mode="mse" controls /> : <div className="flex h-full items-center justify-center text-sm text-zinc-600">เลือกกล้องและช่วงเวลา</div>}</div>
       </div>
     </div>
   );

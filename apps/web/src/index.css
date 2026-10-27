@@ -76,3 +76,9 @@ video-stream video { width: 100%; height: 100%; object-fit: contain; }
   width: 8px; height: 8px;
 }
 .react-grid-item.resizing, .react-grid-item.react-draggable-dragging { z-index: 30; }
+
+/* hide the native HTML5 video control bar in live view (the live scrubber is useless) */
+.lp-hidecontrols video::-webkit-media-controls,
+.lp-hidecontrols video::-webkit-media-controls-enclosure,
+.lp-hidecontrols video::-webkit-media-controls-panel { display: none !important; -webkit-appearance: none; }
+.lp-hidecontrols video::--webkit-media-controls-start-playback-button { display: none !important; }
