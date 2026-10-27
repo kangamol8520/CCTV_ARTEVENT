@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Wrench } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Wrench } from "lucide-react";
 import { api } from "../lib/api";
 import { Button, Field, Input, Modal, Select } from "./ui";
 import clsx from "clsx";
@@ -18,7 +18,21 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
   const { can } = useAuth();
   const reg = useQuery({ queryKey: ["registry", cameraId], queryFn: () => api<RegistryResp>(`/api/registry/cameras/${cameraId}`) });
   const [edit, setEdit] = useState<{ IPv4_1: string; Desciption: string; Status1: string } | null>(null);
-  const [repairs, setRepairs] = useState<Repair[] | null>(null);
+  const [repairPage, setRepairPage] = useState(0);
+  const REPAIRS_PER_PAGE = 4;
+
+  const repairsQuery = useQuery({
+    queryKey: ["registry-repairs", cameraId],
+    queryFn: () => api<Repair[]>(`/api/registry/cameras/${cameraId}/repairs`),
+    enabled: !!reg.data?.linked,
+  });
+  // Newest → oldest by report date.
+  const repairs = useMemo(
+    () => [...(Array.isArray(repairsQuery.data) ? repairsQuery.data : [])].sort((a, b) => new Date(b.JobDate ?? 0).getTime() - new Date(a.JobDate ?? 0).getTime()),
+    [repairsQuery.data],
+  );
+  const repairPages = Math.ceil(repairs.length / REPAIRS_PER_PAGE);
+  const pageRepairs = repairs.slice(repairPage * REPAIRS_PER_PAGE, repairPage * REPAIRS_PER_PAGE + REPAIRS_PER_PAGE);
 
   const dd = reg.data?.detail?.dataDevice ?? {};
   const save = useMutation({
@@ -26,8 +40,6 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["registry", cameraId] }); qc.invalidateQueries({ queryKey: ["cameras"] }); setEdit(null); alert(r.ipChanged ? "บันทึกแล้ว IP เปลี่ยน กำลังค้นหาการเชื่อมต่อใหม่" : "บันทึกกลับไปที่ทะเบียนแล้ว"); },
     onError: (e) => alert((e as Error).message),
   });
-  const loadRepairs = useMutation({ mutationFn: () => api<Repair[]>(`/api/registry/cameras/${cameraId}/repairs`), onSuccess: (r) => setRepairs(Array.isArray(r) ? r : []) });
-
   const Row = ({ label, value }: { label: string; value: unknown }) => (
     <div className="flex justify-between gap-4 border-b border-ink-800/70 py-1.5 text-sm"><span className="text-zinc-500">{label}</span><span className="text-right text-zinc-200">{value as string}</span></div>
   );
@@ -52,42 +64,53 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
           </div>
           <div className="mt-2"><div className="text-xs text-zinc-500">รายละเอียด / OSD</div><div className="text-sm text-zinc-200">{s(dd.Desciption)}</div></div>
 
-          <div className="mt-4 flex items-center gap-2">
-            <Button variant="ghost" onClick={() => loadRepairs.mutate()} disabled={loadRepairs.isPending}><Wrench size={14} /> ประวัติแจ้งซ่อม</Button>
-            {can("OPERATOR") && <Button variant="gold" onClick={() => setEdit({ IPv4_1: s(dd.IPv4_1) === "-" ? "" : String(dd.IPv4_1), Desciption: s(dd.Desciption) === "-" ? "" : String(dd.Desciption), Status1: String(dd.Status1 ?? "0") })}>แก้ไขทะเบียน</Button>}
-          </div>
-          {repairs && (
-            <div className="mt-3">
-              <div className="mb-1.5 text-xs font-medium text-zinc-400">ประวัติแจ้งซ่อม {repairs.length > 0 && `(${repairs.length})`}</div>
-              {repairs.length === 0 ? (
-                <div className="rounded-lg border border-ink-800 p-3 text-xs text-zinc-600">ไม่มีประวัติแจ้งซ่อม</div>
-              ) : (
-                <div className="max-h-60 space-y-2 overflow-auto pr-1">
-                  {repairs.map((r, i) => {
-                    const done = /เสร็จ|สำเร็จ|ปิด/.test(r.StatusName ?? "");
-                    return (
-                      <div key={i} className="rounded-lg border border-ink-800 bg-ink-850 p-3 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-zinc-300">{s(r.BillDoc)}</span>
-                          <span className={clsx("rounded px-1.5 py-0.5 text-[10px]", done ? "bg-emerald-900/50 text-emerald-300" : "bg-amber-900/50 text-amber-200")}>{s(r.StatusName)}</span>
-                        </div>
-                        <div className="mt-1.5 grid gap-x-6 gap-y-1 sm:grid-cols-2">
-                          <div><span className="text-zinc-500">แจ้งเมื่อ </span><span className="text-zinc-300">{dt(r.JobDate)}</span></div>
-                          <div><span className="text-zinc-500">เสร็จเมื่อ </span><span className="text-zinc-300">{dt(r.FinishDate)}</span></div>
-                        </div>
-                        {r.BrokenDes && <div className="mt-1.5"><span className="text-zinc-500">อาการ: </span><span className="text-zinc-200">{r.BrokenDes}</span></div>}
-                        {r.RepairDes && <div><span className="text-zinc-500">การซ่อม: </span><span className="text-zinc-200">{r.RepairDes}</span></div>}
-                        <div className="mt-1 flex items-center justify-between text-[11px] text-zinc-500">
-                          <span>ผู้แจ้ง: {s(r.EmpFullName)}</span>
-                          {((r.RepairPrice ?? 0) + (r.PartPrice ?? 0)) > 0 && <span>ค่าใช้จ่าย {(((r.RepairPrice ?? 0) + (r.PartPrice ?? 0))).toLocaleString("th-TH")} บาท</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
+          {can("OPERATOR") && (
+            <div className="mt-4">
+              <Button variant="gold" onClick={() => setEdit({ IPv4_1: s(dd.IPv4_1) === "-" ? "" : String(dd.IPv4_1), Desciption: s(dd.Desciption) === "-" ? "" : String(dd.Desciption), Status1: String(dd.Status1 ?? "0") })}>แก้ไขทะเบียน</Button>
+            </div>
+          )}
+
+          <div className="mt-4 border-t border-ink-800 pt-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-400"><Wrench size={13} /> ประวัติแจ้งซ่อม{repairs.length > 0 && ` (${repairs.length})`}</div>
+              {repairPages > 1 && (
+                <div className="flex items-center gap-1 text-xs text-zinc-500">
+                  <button onClick={() => setRepairPage((p) => Math.max(0, p - 1))} disabled={repairPage === 0} className="rounded p-0.5 hover:text-cream disabled:opacity-30"><ChevronLeft size={15} /></button>
+                  <span>{repairPage + 1}/{repairPages}</span>
+                  <button onClick={() => setRepairPage((p) => Math.min(repairPages - 1, p + 1))} disabled={repairPage >= repairPages - 1} className="rounded p-0.5 hover:text-cream disabled:opacity-30"><ChevronRight size={15} /></button>
                 </div>
               )}
             </div>
-          )}
+            {repairsQuery.isLoading ? (
+              <div className="text-xs text-zinc-600">กำลังโหลดประวัติ…</div>
+            ) : repairs.length === 0 ? (
+              <div className="rounded-lg border border-ink-800 p-3 text-xs text-zinc-600">ไม่มีประวัติแจ้งซ่อม</div>
+            ) : (
+              <div className="space-y-2">
+                {pageRepairs.map((r, i) => {
+                  const done = /เสร็จ|สำเร็จ|ปิด/.test(r.StatusName ?? "");
+                  return (
+                    <div key={i} className="rounded-lg border border-ink-800 bg-ink-850 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-zinc-300">{s(r.BillDoc)}</span>
+                        <span className={clsx("rounded px-1.5 py-0.5 text-[10px]", done ? "bg-emerald-900/50 text-emerald-300" : "bg-amber-900/50 text-amber-200")}>{s(r.StatusName)}</span>
+                      </div>
+                      <div className="mt-1.5 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                        <div><span className="text-zinc-500">แจ้งเมื่อ </span><span className="text-zinc-300">{dt(r.JobDate)}</span></div>
+                        <div><span className="text-zinc-500">เสร็จเมื่อ </span><span className="text-zinc-300">{dt(r.FinishDate)}</span></div>
+                      </div>
+                      {r.BrokenDes && <div className="mt-1.5"><span className="text-zinc-500">อาการ: </span><span className="text-zinc-200">{r.BrokenDes}</span></div>}
+                      {r.RepairDes && <div><span className="text-zinc-500">การซ่อม: </span><span className="text-zinc-200">{r.RepairDes}</span></div>}
+                      <div className="mt-1 flex items-center justify-between text-[11px] text-zinc-500">
+                        <span>ผู้แจ้ง: {s(r.EmpFullName)}</span>
+                        {((r.RepairPrice ?? 0) + (r.PartPrice ?? 0)) > 0 && <span>ค่าใช้จ่าย {(((r.RepairPrice ?? 0) + (r.PartPrice ?? 0))).toLocaleString("th-TH")} บาท</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
       {edit && (
