@@ -11,6 +11,7 @@
     "import:registry": "bun run scripts/import-registry.ts",
     "apply:credentials": "bun run scripts/apply-credentials.ts",
     "export:registry": "bun run scripts/export-registry.ts",
+    "discover:onvif": "bun run scripts/discover-onvif.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
