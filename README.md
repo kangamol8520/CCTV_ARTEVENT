@@ -45,3 +45,23 @@ bun run dev:web                    # http://localhost:5173
 | VIEWER | ดู Live, ย้อนหลัง, เหตุการณ์, export |
 | OPERATOR | + บันทึก/แก้เหตุการณ์, จัดกลุ่ม, แก้ไขกล้อง, sync สตรีม |
 | ADMIN | + เพิ่ม/ลบกล้องและ NVR, จัดการผู้ใช้, ดู audit log |
+
+## ใส่รหัสผ่านกล้อง/NVR อัตโนมัติ
+
+ทะเบียนไม่ได้บันทึกว่ากล้องตัวไหนใช้รหัสอะไร สคริปต์นี้จะลองรหัสที่กำหนดไว้ (user = admin) กับแต่ละเครื่อง แล้วเก็บเฉพาะตัวที่เข้าได้จริง แบบเข้ารหัสลง DB
+
+1. ใส่รหัสในไฟล์ `.env` ที่ root (git ignore แล้ว):
+   ```
+   CAM_PASSWORD_1=...
+   CAM_PASSWORD_2=...
+   CAM_PASSWORD_3=...
+   ```
+2. รัน (โหลด .env จาก root ให้ด้วย):
+   ```bash
+   set -a && . ./.env && set +a
+   bun run apply:credentials -- --nvrs --dry-run    # ลองก่อน ไม่บันทึก
+   bun run apply:credentials                          # บันทึกจริง (NVR + กล้อง)
+   ```
+   ตัวเลือก: `--cameras` / `--nvrs` เลือกเฉพาะอย่าง, `--only-failing` ทดสอบเฉพาะที่ยัง OFFLINE, `--concurrency N`
+
+วิธีตรวจ: Hikvision/HiLook ใช้ ISAPI, ONVIF/RTSP ใช้ go2rtc, NVR Hikvision ลองพอร์ต 80 เป็น fallback ถ้าพอร์ตที่บันทึกเป็นพอร์ต forward รายงานผลบอกแค่ "รหัสตัวที่ 1/2/3" ไม่เปิดเผยค่า

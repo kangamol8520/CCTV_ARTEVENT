@@ -9,6 +9,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "import:registry": "bun run scripts/import-registry.ts",
+    "apply:credentials": "bun run scripts/apply-credentials.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -8,6 +8,7 @@
     "db:generate": "bun run --cwd apps/api db:generate",
     "db:push": "bun run --cwd apps/api db:push",
     "import:registry": "bun run --cwd apps/api import:registry",
+    "apply:credentials": "bun run --cwd apps/api apply:credentials",
     "typecheck": "bun run --cwd apps/api typecheck && bun run --cwd apps/web typecheck"
   }
 }
