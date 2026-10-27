@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./index.css";
+import { initTheme } from "./lib/theme";
+initTheme();
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";

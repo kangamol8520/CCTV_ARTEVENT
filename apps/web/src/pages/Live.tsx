@@ -82,7 +82,7 @@ export function Live() {
             {!selGroup && (
               <div className="flex items-center gap-0.5 rounded-lg border border-ink-700 p-0.5">
                 {COLS.map((c) => (
-                  <button key={c} onClick={() => setCols(c)} className={clsx("rounded px-2 py-0.5", c === cols ? "bg-gold-500 text-ink-950" : "hover:bg-ink-800")}>{c}×</button>
+                  <button key={c} onClick={() => setCols(c)} className={clsx("rounded px-2 py-0.5", c === cols ? "bg-gold-500 text-onaccent" : "hover:bg-ink-800")}>{c}×</button>
                 ))}
               </div>
             )}

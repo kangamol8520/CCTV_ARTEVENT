@@ -26,6 +26,29 @@
   --color-gold-700: #80652b;
 
   --color-cream: #f4f2ec;
+  /* text that sits ON a gold surface — always dark, never flips with the theme */
+  --color-onaccent: #1b1710;
+}
+
+/* ── Light theme: same black/gray/gold palette, inverted surfaces ──
+   Tailwind v4 utilities read these CSS vars, so overriding the token values here
+   flips every bg-ink-*/text-zinc-*/text-cream class without touching the markup. */
+:root[data-theme="light"] {
+  --color-ink-950: #ffffff;
+  --color-ink-900: #faf8f4;
+  --color-ink-850: #f1eee7;
+  --color-ink-800: #e7e2d8;
+  --color-ink-750: #e0dbd0;
+  --color-ink-700: #d3cdbf;
+  --color-ink-600: #bbb4a4;
+  --color-ink-500: #a39b8a;
+  --color-cream: #1c1915;
+  --color-zinc-100: #18181b;
+  --color-zinc-200: #27272a;
+  --color-zinc-300: #3f3f46;
+  --color-zinc-400: #57565d;
+  --color-zinc-500: #6b6a71;
+  --color-zinc-600: #8f8e95;
 }
 
 :root {
@@ -33,7 +56,7 @@
   --surface: var(--color-ink-900);
   --border: var(--color-ink-700);
   --text: var(--color-cream);
-  --muted: #9b9ba6;
+  --muted: var(--color-zinc-400);
   --gold: var(--color-gold-400);
 }
 

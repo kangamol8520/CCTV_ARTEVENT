@@ -227,8 +227,8 @@ export function Layouts() {
 
           <div className="ml-auto flex items-center gap-2">
             <div className="flex overflow-hidden rounded-lg border border-ink-700">
-              <button onClick={() => switchMode("live")} className={clsx("flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium", mode === "live" ? "bg-gold-500 text-ink-950" : "text-zinc-400 hover:bg-ink-800")}><Tv size={14} /> สด</button>
-              <button onClick={() => switchMode("playback")} className={clsx("flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium", mode === "playback" ? "bg-gold-500 text-ink-950" : "text-zinc-400 hover:bg-ink-800")}><Film size={14} /> ย้อนหลัง</button>
+              <button onClick={() => switchMode("live")} className={clsx("flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium", mode === "live" ? "bg-gold-500 text-onaccent" : "text-zinc-400 hover:bg-ink-800")}><Tv size={14} /> สด</button>
+              <button onClick={() => switchMode("playback")} className={clsx("flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium", mode === "playback" ? "bg-gold-500 text-onaccent" : "text-zinc-400 hover:bg-ink-800")}><Film size={14} /> ย้อนหลัง</button>
             </div>
             {can("OPERATOR") && (
               <Button variant={editing ? "primary" : "ghost"} onClick={() => setEditing((v) => !v)}><Pencil size={14} /> {editing ? "กำลังแก้ไข" : "แก้ไข"}</Button>

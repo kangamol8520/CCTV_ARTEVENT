@@ -6,7 +6,7 @@ export const Button = ({ className, variant = "primary", ...p }: ButtonHTMLAttri
     className={clsx(
       "inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors disabled:opacity-40",
       variant === "primary" && "bg-ink-800 text-cream ring-1 ring-ink-700 hover:bg-ink-750 hover:ring-gold-700",
-      variant === "gold" && "bg-gradient-to-b from-gold-400 to-gold-600 text-ink-950 font-semibold hover:from-gold-300 hover:to-gold-500 shadow-sm shadow-gold-700/30",
+      variant === "gold" && "bg-gradient-to-b from-gold-400 to-gold-600 text-onaccent font-semibold hover:from-gold-300 hover:to-gold-500 shadow-sm shadow-gold-700/30",
       variant === "ghost" && "text-zinc-300 hover:bg-ink-800 hover:text-cream",
       variant === "danger" && "bg-red-900/70 text-red-100 ring-1 ring-red-800/60 hover:bg-red-800",
       className,

@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Camera, FolderKanban, HardDrive, History, LayoutDashboard, LayoutGrid, LogOut, Video } from "lucide-react";
+import { Activity, Camera, FolderKanban, HardDrive, History, LayoutDashboard, LayoutGrid, LogOut, Moon, Sun, Video } from "lucide-react";
 import clsx from "clsx";
 import { useAuth } from "../lib/auth";
+import { getTheme, toggleTheme } from "../lib/theme";
 
 const nav = [
   { to: "/", label: "ภาพรวม", icon: LayoutDashboard, end: true },
@@ -16,11 +18,12 @@ const nav = [
 
 export function Layout() {
   const { user, logout } = useAuth();
+  const [theme, setTheme] = useState(getTheme());
   return (
     <div className="flex h-full bg-ink-950">
       <aside className="flex w-60 shrink-0 flex-col border-r border-ink-800 bg-ink-900">
         <div className="flex items-center gap-2.5 px-5 py-5">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-b from-gold-300 to-gold-600 font-display text-sm font-bold text-ink-950">AE</span>
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-b from-gold-300 to-gold-600 font-display text-sm font-bold text-onaccent">AE</span>
           <div className="leading-tight">
             <div className="font-display text-[15px] font-semibold tracking-wide text-gradient-gold">ARTEVENT</div>
             <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">CCTV Center</div>
@@ -39,7 +42,15 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="m-3 rounded-xl border border-ink-800 bg-ink-850 px-4 py-3 text-xs">
+        <button
+          onClick={() => setTheme(toggleTheme())}
+          className="mx-3 mb-1 flex items-center justify-between rounded-lg border border-ink-800 bg-ink-850 px-3 py-2 text-xs text-zinc-400 hover:text-cream"
+          title="สลับธีมสว่าง/มืด"
+        >
+          <span className="flex items-center gap-2">{theme === "dark" ? <Moon size={14} className="text-gold-400" /> : <Sun size={14} className="text-gold-500" />} ธีม{theme === "dark" ? "มืด" : "สว่าง"}</span>
+          <span className="text-[10px] text-zinc-600">แตะเพื่อสลับ</span>
+        </button>
+        <div className="m-3 mt-0 rounded-xl border border-ink-800 bg-ink-850 px-4 py-3 text-xs">
           <div className="truncate font-medium text-cream">{user?.displayName}</div>
           <div className="mt-0.5 flex items-center justify-between text-zinc-500">
             <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-gold-400">{user?.role}</span>
