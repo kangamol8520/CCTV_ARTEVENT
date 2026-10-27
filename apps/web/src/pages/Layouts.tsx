@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import GridLayout, { WidthProvider, type Layout as RglLayout } from "react-grid-layout";
-import { Clock, Film, Pencil, Plus, Save, Search, Trash2, Tv, X } from "lucide-react";
+import { ChevronRight, Clock, Film, Pencil, Plus, Save, Search, Trash2, Tv, X } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
-import type { Camera, LayoutConfig, LayoutItem, VideoLayout } from "../types";
+import type { Camera, FloorNode, LayoutConfig, LayoutItem, VideoLayout } from "../types";
 import { LivePlayer } from "../components/LivePlayer";
+import { CameraThumb } from "../components/CameraThumb";
 import { Button, Field, Input, Modal, StatusDot, toLocalInput } from "../components/ui";
 import { useAuth } from "../lib/auth";
 
@@ -49,6 +50,9 @@ export function Layouts() {
   const { can } = useAuth();
   const layouts = useQuery({ queryKey: ["layouts"], queryFn: () => api<VideoLayout[]>("/api/layouts") });
   const cameras = useQuery({ queryKey: ["cameras", "all"], queryFn: () => api<Camera[]>("/api/cameras") });
+  const tree = useQuery({ queryKey: ["locations-tree"], queryFn: () => api<FloorNode[]>("/api/locations/tree") });
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setExpanded((e) => ({ ...e, [k]: !e[k] }));
 
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [name, setName] = useState("เลย์เอาต์ใหม่");
@@ -167,18 +171,41 @@ export function Layouts() {
 
         {editing && (
           <div className="flex min-h-0 flex-1 flex-col border-t border-ink-800">
-            <div className="flex items-center gap-2 px-3 py-2">
+            <div className="flex items-center gap-2 border-b border-ink-800 px-3 py-2">
               <Search size={13} className="text-zinc-500" />
               <input value={picker} onChange={(e) => setPicker(e.target.value)} placeholder="ค้นหากล้องเพื่อเพิ่ม" className="w-full bg-transparent text-xs text-cream outline-none placeholder:text-zinc-600" />
             </div>
-            <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
-              {pool.map((c) => (
-                <button key={c.id} onClick={() => addCamera(c)} disabled={usedIds.has(c.id)} className={clsx("flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs", usedIds.has(c.id) ? "opacity-30" : "text-zinc-300 hover:bg-ink-800")}>
-                  <StatusDot status={c.status} />
-                  <span className="w-14 shrink-0 font-medium">{c.deviceNo}</span>
-                  <span className="truncate">{c.name}</span>
-                </button>
-              ))}
+            <div className="min-h-0 flex-1 overflow-auto p-2">
+              {picker ? (
+                pool.map((c) => <CamRow key={c.id} cam={c} used={usedIds.has(c.id)} onAdd={() => addCamera(c)} />)
+              ) : (
+                tree.data?.map((f) => {
+                  const fk = `f${f.id}`;
+                  return (
+                    <div key={f.id}>
+                      <button onClick={() => toggle(fk)} className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs font-medium text-zinc-300 hover:bg-ink-850">
+                        <ChevronRight size={13} className={clsx("transition-transform", expanded[fk] && "rotate-90")} />
+                        <span className="flex-1 truncate">{f.name}</span>
+                        <span className="text-[10px] text-zinc-600">{f.cameraCount}</span>
+                      </button>
+                      {expanded[fk] && f.rooms.filter((r) => r.cameraCount > 0).map((r) => {
+                        const rk = `r${r.id}`;
+                        const roomCams = (cameras.data ?? []).filter((c) => c.roomId === r.id);
+                        return (
+                          <div key={r.id} className="ml-3">
+                            <button onClick={() => toggle(rk)} className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-zinc-400 hover:bg-ink-850">
+                              <ChevronRight size={12} className={clsx("transition-transform", expanded[rk] && "rotate-90")} />
+                              <span className="flex-1 truncate">{r.name}</span>
+                              <span className="text-[10px] text-zinc-600">{r.cameraCount}</span>
+                            </button>
+                            {expanded[rk] && <div className="ml-1 grid grid-cols-2 gap-1.5 py-1">{roomCams.map((c) => <CamCard key={c.id} cam={c} used={usedIds.has(c.id)} onAdd={() => addCamera(c)} />)}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -256,6 +283,35 @@ export function Layouts() {
         </Modal>
       )}
     </div>
+  );
+}
+
+/** Camera card with a preview snapshot, shown in the floor/room picker tree. */
+function CamCard({ cam, used, onAdd }: { cam: Camera; used: boolean; onAdd: () => void }) {
+  return (
+    <button onClick={onAdd} disabled={used} className={clsx("group overflow-hidden rounded-lg border text-left", used ? "cursor-default border-ink-800 opacity-40" : "border-ink-700 hover:border-gold-600")}>
+      <div className="relative aspect-video">
+        <CameraThumb go2rtcUrl={cam.streams.go2rtcUrl} stream={cam.streams.sub} status={cam.status} className="h-full w-full" />
+        {!used && <div className="absolute inset-0 grid place-items-center bg-black/0 text-cream opacity-0 transition group-hover:bg-black/40 group-hover:opacity-100"><Plus size={18} /></div>}
+        {used && <div className="absolute right-1 top-1 rounded bg-black/70 px-1 text-[9px] text-gold-300">เพิ่มแล้ว</div>}
+      </div>
+      <div className="flex items-center gap-1 px-1.5 py-1 text-[10px]">
+        <StatusDot status={cam.status} />
+        <span className="font-medium text-zinc-200">{cam.deviceNo}</span>
+        <span className="truncate text-zinc-500">{cam.name}</span>
+      </div>
+    </button>
+  );
+}
+
+/** Compact camera row with a thumbnail — used for flat search results. */
+function CamRow({ cam, used, onAdd }: { cam: Camera; used: boolean; onAdd: () => void }) {
+  return (
+    <button onClick={onAdd} disabled={used} className={clsx("flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs", used ? "opacity-30" : "text-zinc-300 hover:bg-ink-800")}>
+      <CameraThumb go2rtcUrl={cam.streams.go2rtcUrl} stream={cam.streams.sub} status={cam.status} className="h-7 w-12 shrink-0 rounded" />
+      <span className="w-14 shrink-0 font-medium">{cam.deviceNo}</span>
+      <span className="truncate">{cam.name}</span>
+    </button>
   );
 }
 
