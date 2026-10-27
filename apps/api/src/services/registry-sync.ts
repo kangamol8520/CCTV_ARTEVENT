@@ -12,6 +12,10 @@ import { getRegistryCameras, registryConfigured, type RegistryDevice } from "./r
 import { applyDiscovery, loadPasswords } from "./discovery.ts";
 import { syncCamera } from "./go2rtc.ts";
 
+// Host prefixes to keep hidden (unreachable / foreign subnets), e.g. the new parking lot.
+const HIDDEN_HOST_PREFIXES = (process.env.HIDDEN_HOST_PREFIXES ?? "192.168.19.").split(",").map((s) => s.trim()).filter(Boolean);
+const isHiddenHost = (h: string | null) => !!h && HIDDEN_HOST_PREFIXES.some((p) => h.startsWith(p));
+
 const FLOOR_NAMES: Record<string, string> = { "00": "ภายนอกอาคาร" };
 const toDate = (s: string | null) => {
   if (!s) return null;
@@ -60,7 +64,15 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
       const floorId = floorIdByCode.get(fc) ?? null;
       const roomId = roomIdByKey.get(`${fc}|${d.RoomCode ?? ""}`) ?? null;
       const host = isIp(d.IPv4_1) ? d.IPv4_1!.split(":")[0]! : null;
-      const enabled = String(d.Status1) !== "1";
+      // Match by registryId, else adopt a legacy row by DeviceNo.
+      let cam = await prisma.camera.findFirst({ where: { registryId: d.ID } });
+      if (!cam) cam = await prisma.camera.findUnique({ where: { deviceNo: d.DeviceNo } });
+
+      // Cameras on an unreachable/foreign subnet (e.g. the new parking lot on 192.168.19.x), or
+      // already flagged HIDDEN, stay hidden: disabled, flagged, never re-discovered — preserved
+      // across syncs even though the registry lists them active.
+      const hidden = isHiddenHost(host) || !!cam?.importFlags?.includes("HIDDEN");
+      const enabled = String(d.Status1) !== "1" && !hidden;
       const common = {
         name: deriveName(d.Desciption, d.DeviceNo),
         description: d.Desciption,
@@ -74,13 +86,9 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
         registrySyncedAt: new Date(),
       };
 
-      // Match by registryId, else adopt a legacy row by DeviceNo.
-      let cam = await prisma.camera.findFirst({ where: { registryId: d.ID } });
-      if (!cam) cam = await prisma.camera.findUnique({ where: { deviceNo: d.DeviceNo } });
-
       if (!cam) {
         const created = await prisma.camera.create({
-          data: { deviceNo: d.DeviceNo, ...common, host, protocol: host ? "ONVIF" : "NVR_CHANNEL", rtspPort: 554, httpPort: 80, status: "UNKNOWN", importFlags: host ? "NEW_FROM_REGISTRY" : "PLUGANDPLAY_NEEDS_CHANNEL" },
+          data: { deviceNo: d.DeviceNo, ...common, host, protocol: host ? "ONVIF" : "NVR_CHANNEL", rtspPort: 554, httpPort: 80, status: "UNKNOWN", importFlags: hidden ? "HIDDEN_OTHER_NETWORK" : host ? "NEW_FROM_REGISTRY" : "PLUGANDPLAY_NEEDS_CHANNEL" },
         });
         summary.created++;
         if (host && enabled) toRediscover.push(created.id);
@@ -90,13 +98,14 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
       const ipChanged = host !== null && host !== cam.host;
       const data: Record<string, unknown> = { ...common };
       if (host !== null) data.host = host; // keep existing host if registry has no valid IP
-      if (ipChanged) { data.importFlags = "IP_CHANGED"; summary.ipChanged++; }
+      if (hidden) data.importFlags = "HIDDEN_OTHER_NETWORK";
+      else if (ipChanged) { data.importFlags = "IP_CHANGED"; summary.ipChanged++; }
       await prisma.camera.update({ where: { id: cam.id }, data });
       summary.updated++;
       if (!enabled && cam.isEnabled) summary.disabled++;
 
-      if (ipChanged && enabled) toRediscover.push(cam.id);
-      else if (!enabled) await syncCamera(cam.id).catch(() => {}); // drop stream for retired cams
+      if (ipChanged && enabled && !hidden) toRediscover.push(cam.id);
+      else if (!enabled) await syncCamera(cam.id).catch(() => {}); // drop stream for disabled/hidden cams
     } catch (e) {
       summary.errors.push(`${d.DeviceNo}: ${(e as Error).message}`);
     }

@@ -50,26 +50,33 @@ async function runWithLimit<T>(items: T[], limit: number, fn: (item: T) => Promi
   await Promise.all(workers);
 }
 
-/** Reachability with one retry, so a single transient TCP timeout under load does not flap a
- *  working camera to OFFLINE (the usual cause of "offline in app but reachable by browser"). */
-async function reachable(host: string, port: number): Promise<boolean> {
+async function probeRetry(host: string, port: number): Promise<boolean> {
   if (await tcpProbe(host, port, 3000)) return true;
-  await Bun.sleep(300);
+  await Bun.sleep(250);
   return tcpProbe(host, port, 4000);
+}
+
+/** "Online" means the device answers on EITHER its RTSP port or its HTTP port (with a retry).
+ *  Checking only RTSP 554 wrongly flapped working cameras to OFFLINE under load — devices that
+ *  the browser can still open on HTTP. Each probe retries before giving up. */
+async function reachable(host: string, rtspPort: number, httpPort?: number): Promise<boolean> {
+  if (await probeRetry(host, rtspPort)) return true;
+  if (httpPort && httpPort !== rtspPort && (await probeRetry(host, httpPort))) return true;
+  return false;
 }
 
 export async function runHealthCheck() {
   const now = new Date();
   const nvrs = await prisma.nvr.findMany();
-  await runWithLimit(nvrs, 8, async (n) => {
-    const ok = await reachable(n.host, n.rtspPort);
+  await runWithLimit(nvrs, 6, async (n) => {
+    const ok = await reachable(n.host, n.rtspPort, n.httpPort);
     await prisma.nvr.update({ where: { id: n.id }, data: { status: ok ? "ONLINE" : "OFFLINE", ...(ok ? { lastSeenAt: now } : {}) } });
   });
   const cams = await prisma.camera.findMany({ where: { isEnabled: true }, include: { nvr: true } });
-  await runWithLimit(cams, 12, async (c) => {
+  await runWithLimit(cams, 6, async (c) => {
     let ok: boolean;
-    if (c.protocol === "NVR_CHANNEL") ok = c.nvr ? c.nvr.status === "ONLINE" || (await reachable(c.nvr.host, c.nvr.rtspPort)) : false;
-    else if (c.host) ok = await reachable(c.host, c.rtspPort);
+    if (c.protocol === "NVR_CHANNEL") ok = c.nvr ? c.nvr.status === "ONLINE" || (await reachable(c.nvr.host, c.nvr.rtspPort, c.nvr.httpPort)) : false;
+    else if (c.host) ok = await reachable(c.host, c.rtspPort, c.httpPort);
     else ok = false;
     await prisma.camera.update({ where: { id: c.id }, data: { status: ok ? "ONLINE" : "OFFLINE", ...(ok ? { lastSeenAt: now } : {}) } });
   });
