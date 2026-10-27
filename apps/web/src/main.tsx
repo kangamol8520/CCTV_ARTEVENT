@@ -8,6 +8,7 @@ import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Live } from "./pages/Live";
+import { Layouts } from "./pages/Layouts";
 import { Playback } from "./pages/Playback";
 import { Events } from "./pages/Events";
 import { Cameras } from "./pages/Cameras";
@@ -32,6 +33,7 @@ createRoot(document.getElementById("root")!).render(
             <Route element={<Guarded />}>
               <Route index element={<Dashboard />} />
               <Route path="live" element={<Live />} />
+              <Route path="layouts" element={<Layouts />} />
               <Route path="playback" element={<Playback />} />
               <Route path="events" element={<Events />} />
               <Route path="cameras" element={<Cameras />} />

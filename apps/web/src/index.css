@@ -1,11 +1,78 @@
 @import "tailwindcss";
+@import "react-grid-layout/css/styles.css";
+
+/* ─── Luxury theme: black · gray · gold, Prompt (headings) + Sarabun (body) ─── */
 
 @theme {
-  --font-sans: "Inter", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Sarabun", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Prompt", "Sarabun", ui-sans-serif, sans-serif;
+
+  /* ink = near-black charcoal scale */
+  --color-ink-950: #09090b;
+  --color-ink-900: #101013;
+  --color-ink-850: #16161a;
+  --color-ink-800: #1d1d22;
+  --color-ink-750: #24242b;
+  --color-ink-700: #2d2d35;
+  --color-ink-600: #3b3b45;
+  --color-ink-500: #51515d;
+
+  /* gold accent */
+  --color-gold-200: #f1e2bd;
+  --color-gold-300: #e6cd92;
+  --color-gold-400: #d7b36a;
+  --color-gold-500: #c7a052;
+  --color-gold-600: #a8863d;
+  --color-gold-700: #80652b;
+
+  --color-cream: #f4f2ec;
+}
+
+:root {
+  --bg: var(--color-ink-950);
+  --surface: var(--color-ink-900);
+  --border: var(--color-ink-700);
+  --text: var(--color-cream);
+  --muted: #9b9ba6;
+  --gold: var(--color-gold-400);
 }
 
 html, body, #root { height: 100%; }
-body { margin: 0; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, .font-display { font-family: var(--font-display); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--color-ink-950); }
+::-webkit-scrollbar-thumb { background: var(--color-ink-700); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ink-600); }
+
+/* gold ring used for active / focus states */
+.ring-gold { box-shadow: 0 0 0 1px var(--color-gold-500), 0 0 18px -6px var(--color-gold-500); }
+.text-gradient-gold {
+  background: linear-gradient(100deg, var(--color-gold-200), var(--color-gold-400) 55%, var(--color-gold-600));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hairline { border-color: color-mix(in srgb, var(--color-gold-500) 22%, transparent); }
 
 video-stream { display: block; width: 100%; height: 100%; background: #000; }
 video-stream video { width: 100%; height: 100%; object-fit: contain; }
+
+/* react-grid-layout dark/gold skin */
+.react-grid-item { transition: transform .15s ease, width .15s ease, height .15s ease; }
+.react-grid-item.react-grid-placeholder {
+  background: color-mix(in srgb, var(--color-gold-500) 28%, transparent) !important;
+  border: 1px dashed var(--color-gold-400);
+  border-radius: 10px; opacity: 1;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-right-color: var(--color-gold-400) !important;
+  border-bottom-color: var(--color-gold-400) !important;
+  width: 8px; height: 8px;
+}
+.react-grid-item.resizing, .react-grid-item.react-draggable-dragging { z-index: 30; }

@@ -18,7 +18,7 @@ export function Login() {
 
   return (
     <div className="flex h-full items-center justify-center">
-      <form onSubmit={submit} className="w-80 space-y-4 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+      <form onSubmit={submit} className="w-80 space-y-4 rounded-lg border border-ink-800 bg-ink-900 p-6">
         <div className="text-lg font-semibold">CCTV Platform</div>
         <Field label="ชื่อผู้ใช้"><Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></Field>
         <Field label="รหัสผ่าน"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>

@@ -60,7 +60,7 @@ export function Cameras() {
       <div className="px-5 pb-5">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-zinc-500"><tr><th className="py-1">สถานะ</th><th>รหัส</th><th>ชื่อ</th><th>ชั้น / ห้อง</th><th>ยี่ห้อ</th><th>โปรโตคอล</th><th>IP</th><th>NVR</th><th>ช่อง</th><th>Flags</th><th></th></tr></thead>
-          <tbody className="divide-y divide-zinc-800/80">
+          <tbody className="divide-y divide-ink-800/80">
             {list.map((c) => (
               <tr key={c.id} className={!c.isEnabled ? "opacity-50" : ""}>
                 <td className="py-1.5"><StatusDot status={c.status} /></td>
@@ -75,7 +75,7 @@ export function Cameras() {
                 <td className="text-xs text-amber-400">{c.importFlags}</td>
                 <td className="whitespace-nowrap text-right">
                   <button className="text-xs text-zinc-400 hover:text-white" onClick={() => probe.mutate(c.id)} title={`last seen ${fmtDate(c.lastSeenAt)}`}>ตรวจ</button>
-                  {can("OPERATOR") && <button className="ml-2 text-xs text-blue-400 hover:underline" onClick={() => setEdit({ ...c })}>แก้ไข</button>}
+                  {can("OPERATOR") && <button className="ml-2 text-xs text-gold-400 hover:underline" onClick={() => setEdit({ ...c })}>แก้ไข</button>}
                 </td>
               </tr>
             ))}

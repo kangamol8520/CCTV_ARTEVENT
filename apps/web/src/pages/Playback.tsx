@@ -43,10 +43,10 @@ export function Playback() {
       </div>
       {err && <div className="px-5 text-sm text-red-400">{err}</div>}
       <div className="flex min-h-0 flex-1 gap-3 px-5 pb-5">
-        <div className="w-80 shrink-0 overflow-auto rounded border border-zinc-800">
+        <div className="w-80 shrink-0 overflow-auto rounded border border-ink-800">
           {segments?.segments.length === 0 && <div className="p-3 text-xs text-zinc-500">ไม่พบการบันทึกในช่วงนี้</div>}
           {segments?.segments.map((s, i) => (
-            <button key={i} onClick={() => open.mutate({ from: s.start, to: s.end })} className="flex w-full items-center justify-between border-b border-zinc-800/60 px-3 py-1.5 text-left text-xs hover:bg-zinc-800">
+            <button key={i} onClick={() => open.mutate({ from: s.start, to: s.end })} className="flex w-full items-center justify-between border-b border-ink-800/60 px-3 py-1.5 text-left text-xs hover:bg-ink-800">
               <span>{new Date(s.start).toLocaleTimeString("th-TH")} – {new Date(s.end).toLocaleTimeString("th-TH")}</span>
               <span className="text-zinc-500">{s.type}</span>
             </button>

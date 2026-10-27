@@ -10,3 +10,4 @@ data/
 apps/api/generated/
 registry/*.xlsx
 infra/go2rtc/go2rtc.yaml
+.claude/

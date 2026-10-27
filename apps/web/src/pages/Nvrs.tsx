@@ -30,7 +30,7 @@ export function Nvrs() {
       <div className="px-5 py-3">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-zinc-500"><tr><th className="py-1">สถานะ</th><th>ชื่อ</th><th>รุ่น</th><th>IP</th><th>HTTP</th><th>RTSP</th><th>กล้อง</th><th>เห็นล่าสุด</th><th></th></tr></thead>
-          <tbody className="divide-y divide-zinc-800/80">
+          <tbody className="divide-y divide-ink-800/80">
             {nvrs.data?.map((n) => (
               <tr key={n.id}>
                 <td className="py-1.5"><StatusDot status={n.status} /></td>
@@ -42,7 +42,7 @@ export function Nvrs() {
                 <td className="text-xs text-zinc-500">{fmtDate(n.lastSeenAt)}</td>
                 <td className="whitespace-nowrap text-right">
                   <button className="text-xs text-zinc-400 hover:text-white" onClick={() => probe.mutate(n.id)}>ตรวจ</button>
-                  {can("ADMIN") && <button className="ml-2 text-xs text-blue-400 hover:underline" onClick={() => setEdit({ ...n })}>แก้ไข</button>}
+                  {can("ADMIN") && <button className="ml-2 text-xs text-gold-400 hover:underline" onClick={() => setEdit({ ...n })}>แก้ไข</button>}
                 </td>
               </tr>
             ))}

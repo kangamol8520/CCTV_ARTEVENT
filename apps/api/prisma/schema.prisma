@@ -24,6 +24,22 @@ model User {
   eventsCreated      Event[]    @relation("EventCreatedBy")
   eventsAcknowledged Event[]    @relation("EventAcknowledgedBy")
   auditLogs          AuditLog[]
+  layouts            Layout[]
+}
+
+/// A saved video-wall layout: a set of camera tiles with position/size, used in Live and
+/// synchronized playback. config is JSON — see apps/web/src/types.ts LayoutConfig.
+model Layout {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.NVarChar(128)
+  description String?  @db.NVarChar(500)
+  config      String   @db.NVarChar(Max)
+  isShared    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdById Int?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model Floor {

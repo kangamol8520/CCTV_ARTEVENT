@@ -38,7 +38,7 @@ export function Live() {
   const title = sel.kind === "all" ? "กล้องทั้งหมด" : sel.kind === "group" ? selGroup?.name : sel.kind === "floor" ? tree.data?.find((f) => f.id === sel.id)?.name : tree.data?.flatMap((f) => f.rooms).find((r) => r.id === sel.id)?.name;
 
   const item = (active: boolean, label: string, count: number | undefined, onClick: () => void, indent = false) => (
-    <button onClick={onClick} className={clsx("flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm", indent && "pl-6", active ? "bg-blue-600/30 text-white" : "text-zinc-300 hover:bg-zinc-800")}>
+    <button onClick={onClick} className={clsx("flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm", indent && "pl-6", active ? "bg-gold-600/20 text-white" : "text-zinc-300 hover:bg-ink-800")}>
       <span className="truncate">{label}</span>
       {count !== undefined && <span className="text-xs text-zinc-500">{count}</span>}
     </button>
@@ -46,7 +46,7 @@ export function Live() {
 
   return (
     <div className="flex h-full">
-      <aside className="w-60 shrink-0 overflow-auto border-r border-zinc-800 bg-zinc-900/60 p-2">
+      <aside className="w-60 shrink-0 overflow-auto border-r border-ink-800 bg-ink-900/60 p-2">
         {item(sel.kind === "all", "กล้องทั้งหมด", cameras.data?.length, () => setSel({ kind: "all" }))}
         <div className="mt-3 px-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">กลุ่มที่กำหนดเอง</div>
         {groups.data?.map((g) => item(sel.kind === "group" && sel.id === g.id, g.name, g.members.length, () => setSel({ kind: "group", id: g.id })))}
@@ -60,14 +60,14 @@ export function Live() {
         ))}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+        <div className="flex items-center justify-between border-b border-ink-800 px-4 py-2">
           <div className="text-sm font-semibold">{title} <span className="ml-2 text-xs font-normal text-zinc-500">{visible.length} กล้อง</span></div>
           <div className="flex items-center gap-3 text-xs text-zinc-400">
             <label className="flex items-center gap-1"><input type="checkbox" checked={onlyOnline} onChange={(e) => setOnlyOnline(e.target.checked)} /> เฉพาะออนไลน์</label>
             {!selGroup && (
               <div className="flex items-center gap-1">
                 {COLS.map((c) => (
-                  <button key={c} onClick={() => setCols(c)} className={clsx("rounded px-2 py-0.5", c === cols ? "bg-zinc-700 text-white" : "hover:bg-zinc-800")}>{c}×</button>
+                  <button key={c} onClick={() => setCols(c)} className={clsx("rounded px-2 py-0.5", c === cols ? "bg-zinc-700 text-white" : "hover:bg-ink-800")}>{c}×</button>
                 ))}
               </div>
             )}
@@ -100,7 +100,7 @@ export function Live() {
         <div className="fixed inset-0 z-50 flex flex-col bg-black">
           <div className="flex items-center justify-between px-4 py-2 text-sm">
             <div><span className="font-semibold">{focus.deviceNo}</span> <span className="text-zinc-400">{focus.name}</span> <span className="ml-2 text-xs text-zinc-500">{focus.floor?.name} · {focus.room?.name}</span></div>
-            <button onClick={() => setFocus(null)} className="rounded p-1 hover:bg-zinc-800"><X size={18} /></button>
+            <button onClick={() => setFocus(null)} className="rounded p-1 hover:bg-ink-800"><X size={18} /></button>
           </div>
           <div className="min-h-0 flex-1"><LivePlayer go2rtcUrl={focus.streams.go2rtcUrl} stream={focus.streams.main} /></div>
         </div>

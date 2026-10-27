@@ -47,17 +47,17 @@ export function Events() {
       <div className="px-5 pb-5">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-zinc-500"><tr><th className="py-1">เวลา</th><th>ระดับ</th><th>ประเภท</th><th>หัวข้อ</th><th>กล้อง</th><th>ผู้บันทึก</th><th>รับทราบ</th><th></th></tr></thead>
-          <tbody className="divide-y divide-zinc-800/80">
+          <tbody className="divide-y divide-ink-800/80">
             {events.data?.items.map((e) => (
               <tr key={e.id}>
                 <td className="whitespace-nowrap py-1.5 text-xs">{fmtDate(e.startedAt)}</td>
-                <td><span className={`rounded px-1.5 py-0.5 text-xs ${e.severity === "CRITICAL" ? "bg-red-700 text-white" : e.severity === "HIGH" ? "bg-red-900/60 text-red-200" : e.severity === "MEDIUM" ? "bg-amber-900/50 text-amber-200" : "bg-zinc-800 text-zinc-300"}`}>{e.severity}</span></td>
+                <td><span className={`rounded px-1.5 py-0.5 text-xs ${e.severity === "CRITICAL" ? "bg-red-700 text-white" : e.severity === "HIGH" ? "bg-red-900/60 text-red-200" : e.severity === "MEDIUM" ? "bg-amber-900/50 text-amber-200" : "bg-ink-800 text-zinc-300"}`}>{e.severity}</span></td>
                 <td className="text-zinc-400">{e.type}</td>
                 <td className="max-w-md truncate" title={e.description ?? ""}>{e.title}</td>
                 <td className="text-zinc-400">{e.camera ? `${e.camera.deviceNo} · ${e.camera.room?.name ?? ""}` : "-"}</td>
                 <td className="text-xs text-zinc-500">{e.createdBy?.displayName}</td>
-                <td className="text-xs text-zinc-500">{e.acknowledgedBy ? e.acknowledgedBy.displayName : can("OPERATOR") ? <button className="text-blue-400 hover:underline" onClick={() => ack.mutate(e.id)}>รับทราบ</button> : "-"}</td>
-                <td className="text-right">{can("OPERATOR") && <button className="text-xs text-blue-400 hover:underline" onClick={() => setEdit({ id: e.id, cameraId: e.cameraId, type: e.type, severity: e.severity, title: e.title, description: e.description ?? "", startedAt: toLocalInput(new Date(e.startedAt)), endedAt: e.endedAt ? toLocalInput(new Date(e.endedAt)) : "" })}>แก้ไข</button>}</td>
+                <td className="text-xs text-zinc-500">{e.acknowledgedBy ? e.acknowledgedBy.displayName : can("OPERATOR") ? <button className="text-gold-400 hover:underline" onClick={() => ack.mutate(e.id)}>รับทราบ</button> : "-"}</td>
+                <td className="text-right">{can("OPERATOR") && <button className="text-xs text-gold-400 hover:underline" onClick={() => setEdit({ id: e.id, cameraId: e.cameraId, type: e.type, severity: e.severity, title: e.title, description: e.description ?? "", startedAt: toLocalInput(new Date(e.startedAt)), endedAt: e.endedAt ? toLocalInput(new Date(e.endedAt)) : "" })}>แก้ไข</button>}</td>
               </tr>
             ))}
           </tbody>

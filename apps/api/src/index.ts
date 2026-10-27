@@ -13,6 +13,7 @@ import { eventRoutes } from "./routes/events.ts";
 import { playbackRoutes } from "./routes/playback.ts";
 import { reportRoutes } from "./routes/reports.ts";
 import { systemRoutes } from "./routes/system.ts";
+import { layoutRoutes } from "./routes/layouts.ts";
 import { syncAllCameras, isReachable } from "./services/go2rtc.ts";
 import { startHealthScheduler } from "./services/health.ts";
 
@@ -44,7 +45,7 @@ export const app = new Elysia()
   .get("/", () => ({ name: "cctv-platform-api", version: "0.1.0" }))
   .get("/health", () => ({ ok: true, time: new Date().toISOString() }))
   .group("/api", (g) =>
-    g.use(authRoutes).use(locationRoutes).use(nvrRoutes).use(cameraRoutes).use(groupRoutes).use(eventRoutes).use(playbackRoutes).use(reportRoutes).use(systemRoutes),
+    g.use(authRoutes).use(locationRoutes).use(nvrRoutes).use(cameraRoutes).use(groupRoutes).use(eventRoutes).use(playbackRoutes).use(reportRoutes).use(systemRoutes).use(layoutRoutes),
   );
 
 if (import.meta.main) {

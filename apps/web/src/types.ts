@@ -28,3 +28,10 @@ export interface Event {
 }
 
 export interface SystemStatus { cameras: { total: number; online: number }; nvrs: { total: number; online: number }; go2rtc: { reachable: boolean; publicUrl: string; activeStreams: number; viewers: number } }
+
+export interface LayoutItem { cameraId: number; x: number; y: number; w: number; h: number }
+export interface LayoutConfig { items: LayoutItem[]; cols: number; rowHeight: number }
+export interface VideoLayout {
+  id: number; name: string; description: string | null; config: LayoutConfig; isShared: boolean;
+  sortOrder: number; createdAt: string; createdBy: { id: number; displayName: string } | null;
+}
