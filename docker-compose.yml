@@ -1,0 +1,30 @@
+# Development stack. Production will run the same images on the Linux server.
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64   # Apple Silicon: enable "Use Rosetta for x86/amd64 emulation" in Docker Desktop
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "ChangeMe_Strong1!"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"ChangeMe_Strong1!\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    network_mode: host          # Linux: host mode gives direct access to camera VLANs. On macOS use the ports below instead.
+    volumes:
+      - ./infra/go2rtc:/config
+    environment:
+      TZ: Asia/Bangkok
+    restart: unless-stopped
+
+volumes:
+  mssql-data:

@@ -1,0 +1,197 @@
+// CCTV platform — Phase 1 schema (SQL Server)
+// Prisma on SQL Server has no native enums; string columns with documented values are used instead.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+/// Application user. role: ADMIN | OPERATOR | VIEWER
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique @db.NVarChar(64)
+  passwordHash String   @db.NVarChar(255)
+  displayName  String   @db.NVarChar(128)
+  role         String   @default("VIEWER") @db.NVarChar(16)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  eventsCreated      Event[]    @relation("EventCreatedBy")
+  eventsAcknowledged Event[]    @relation("EventAcknowledgedBy")
+  auditLogs          AuditLog[]
+}
+
+model Floor {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique @db.NVarChar(8)
+  name      String   @db.NVarChar(128)
+  sortOrder Int      @default(0)
+  rooms     Room[]
+  cameras   Camera[]
+  nvrs      Nvr[]
+}
+
+model Room {
+  id      Int     @id @default(autoincrement())
+  code    String  @db.NVarChar(8)
+  name    String  @db.NVarChar(128)
+  floorId Int
+  floor   Floor   @relation(fields: [floorId], references: [id])
+  cameras Camera[]
+  nvrs    Nvr[]
+
+  @@unique([floorId, code])
+}
+
+/// Network video recorder. brand: HIKVISION | TPLINK | OTHER
+model Nvr {
+  id             Int       @id @default(autoincrement())
+  name           String    @unique @db.NVarChar(128)
+  legacyDeviceNo String?   @db.NVarChar(32)
+  brand          String    @default("HIKVISION") @db.NVarChar(32)
+  model          String?   @db.NVarChar(128)
+  serialNo       String?   @db.NVarChar(128)
+  host           String    @db.NVarChar(64)
+  httpPort       Int       @default(80)
+  rtspPort       Int       @default(554)
+  username       String?   @db.NVarChar(64)
+  /// AES-256-GCM, base64 (see src/lib/crypto.ts)
+  passwordEnc    String?   @db.NVarChar(512)
+  maxChannels    Int       @default(16)
+  /// RTSP path templates for a channel; {ch} is the 1-based channel number
+  channelMainPath String   @default("/Streaming/Channels/{ch}01") @db.NVarChar(256)
+  channelSubPath  String   @default("/Streaming/Channels/{ch}02") @db.NVarChar(256)
+  /// Playback RTSP path template; {ch} channel, {start}/{end} as yyyyMMddTHHmmssZ
+  playbackPath   String    @default("/Streaming/tracks/{ch}01?starttime={start}&endtime={end}") @db.NVarChar(256)
+  status         String    @default("UNKNOWN") @db.NVarChar(16)
+  lastSeenAt     DateTime?
+  notes          String?   @db.NVarChar(1000)
+  floorId        Int?
+  floor          Floor?    @relation(fields: [floorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  roomId         Int?
+  room           Room?     @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  cameras        Camera[]
+}
+
+/// Camera.
+/// protocol: HIKVISION (ISAPI/RTSP direct) | ONVIF (go2rtc onvif discovery) | RTSP (explicit paths) | NVR_CHANNEL (plug-and-play via NVR)
+/// status: UNKNOWN | ONLINE | OFFLINE
+model Camera {
+  id             Int       @id @default(autoincrement())
+  deviceNo       String    @unique @db.NVarChar(32)
+  name           String    @db.NVarChar(128)
+  description    String?   @db.NVarChar(500)
+  brand          String    @default("UNKNOWN") @db.NVarChar(32)
+  model          String?   @db.NVarChar(128)
+  protocol       String    @default("ONVIF") @db.NVarChar(16)
+  host           String?   @db.NVarChar(64)
+  rtspPort       Int       @default(554)
+  httpPort       Int       @default(80)
+  username       String?   @db.NVarChar(64)
+  passwordEnc    String?   @db.NVarChar(512)
+  /// Overrides for protocol RTSP (full path incl. leading slash)
+  mainStreamPath String?   @db.NVarChar(256)
+  subStreamPath  String?   @db.NVarChar(256)
+  nvrId          Int?
+  nvr            Nvr?      @relation(fields: [nvrId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// 1-based channel number on the NVR (needed for NVR_CHANNEL and for playback)
+  nvrChannel     Int?
+  floorId        Int?
+  floor          Floor?    @relation(fields: [floorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  roomId         Int?
+  room           Room?     @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  isEnabled      Boolean   @default(true)
+  status         String    @default("UNKNOWN") @db.NVarChar(16)
+  lastSeenAt     DateTime?
+  sortOrder      Int       @default(0)
+  /// Raw values from the legacy registry, kept for traceability
+  legacyId       Int?
+  legacyNvrRef   String?   @db.NVarChar(64)
+  purchaseDate   DateTime?
+  warrantyEnd    DateTime?
+  price          Decimal?  @db.Decimal(12, 2)
+  /// Free-form flags raised by the importer (e.g. NVR_UNMAPPED, CHANNEL_UNKNOWN)
+  importFlags    String?   @db.NVarChar(256)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  groupMembers   CameraGroupMember[]
+  events         Event[]
+}
+
+model CameraGroup {
+  id          Int                 @id @default(autoincrement())
+  name        String              @unique @db.NVarChar(128)
+  description String?             @db.NVarChar(500)
+  gridColumns Int                 @default(4)
+  sortOrder   Int                 @default(0)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  members     CameraGroupMember[]
+}
+
+model CameraGroupMember {
+  groupId   Int
+  cameraId  Int
+  sortOrder Int         @default(0)
+  group     CameraGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  camera    Camera      @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, cameraId])
+}
+
+/// Incident / event record.
+/// type: INCIDENT | MAINTENANCE | INTRUSION | ACCESS | OTHER (AI types added later)
+/// severity: LOW | MEDIUM | HIGH | CRITICAL
+/// source: MANUAL | AI | NVR | SYSTEM
+model Event {
+  id               Int       @id @default(autoincrement())
+  cameraId         Int?
+  camera           Camera?   @relation(fields: [cameraId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type             String    @default("INCIDENT") @db.NVarChar(32)
+  severity         String    @default("MEDIUM") @db.NVarChar(16)
+  source           String    @default("MANUAL") @db.NVarChar(16)
+  title            String    @db.NVarChar(200)
+  description      String?   @db.NVarChar(2000)
+  startedAt        DateTime
+  endedAt          DateTime?
+  snapshotPath     String?   @db.NVarChar(512)
+  clipPath         String?   @db.NVarChar(512)
+  /// JSON payload from the detector (zones, labels, scores) — Phase 2
+  metadata         String?   @db.NVarChar(Max)
+  createdById      Int?
+  createdBy        User?     @relation("EventCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  acknowledgedAt   DateTime?
+  acknowledgedById Int?
+  acknowledgedBy   User?     @relation("EventAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([startedAt])
+  @@index([cameraId, startedAt])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  action    String   @db.NVarChar(64)
+  entity    String   @db.NVarChar(64)
+  entityId  String?  @db.NVarChar(64)
+  detail    String?  @db.NVarChar(Max)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Setting {
+  key   String @id @db.NVarChar(64)
+  value String @db.NVarChar(Max)
+}

@@ -1,0 +1,18 @@
+# Copy to go2rtc.yaml before starting. go2rtc appends camera streams (with credentials)
+# to go2rtc.yaml at runtime, so the live file is git-ignored.
+api:
+  listen: ":1984"
+  origin: "*"
+
+rtsp:
+  listen: ":8554"
+
+webrtc:
+  listen: ":8555/tcp"
+  candidates:
+    - stun:8555
+
+log:
+  level: info
+
+streams:

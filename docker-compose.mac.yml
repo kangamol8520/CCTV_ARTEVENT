@@ -1,0 +1,10 @@
+# Override for macOS development where host networking is not available:
+#   docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d
+services:
+  go2rtc:
+    network_mode: bridge
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"

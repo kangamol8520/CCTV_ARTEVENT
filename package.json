@@ -1,0 +1,13 @@
+{
+  "name": "cctv-platform",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev:api": "bun run --cwd apps/api dev",
+    "dev:web": "bun run --cwd apps/web dev",
+    "db:generate": "bun run --cwd apps/api db:generate",
+    "db:push": "bun run --cwd apps/api db:push",
+    "import:registry": "bun run --cwd apps/api import:registry",
+    "typecheck": "bun run --cwd apps/api typecheck && bun run --cwd apps/web typecheck"
+  }
+}

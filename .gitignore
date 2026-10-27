@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+data/
+apps/api/generated/
+registry/*.xlsx
+infra/go2rtc/go2rtc.yaml
