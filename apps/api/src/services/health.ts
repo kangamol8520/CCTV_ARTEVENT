@@ -50,18 +50,26 @@ async function runWithLimit<T>(items: T[], limit: number, fn: (item: T) => Promi
   await Promise.all(workers);
 }
 
+/** Reachability with one retry, so a single transient TCP timeout under load does not flap a
+ *  working camera to OFFLINE (the usual cause of "offline in app but reachable by browser"). */
+async function reachable(host: string, port: number): Promise<boolean> {
+  if (await tcpProbe(host, port, 3000)) return true;
+  await Bun.sleep(300);
+  return tcpProbe(host, port, 4000);
+}
+
 export async function runHealthCheck() {
   const now = new Date();
   const nvrs = await prisma.nvr.findMany();
-  await runWithLimit(nvrs, 10, async (n) => {
-    const ok = await tcpProbe(n.host, n.rtspPort);
+  await runWithLimit(nvrs, 8, async (n) => {
+    const ok = await reachable(n.host, n.rtspPort);
     await prisma.nvr.update({ where: { id: n.id }, data: { status: ok ? "ONLINE" : "OFFLINE", ...(ok ? { lastSeenAt: now } : {}) } });
   });
   const cams = await prisma.camera.findMany({ where: { isEnabled: true }, include: { nvr: true } });
-  await runWithLimit(cams, 20, async (c) => {
+  await runWithLimit(cams, 12, async (c) => {
     let ok: boolean;
-    if (c.protocol === "NVR_CHANNEL") ok = c.nvr ? c.nvr.status === "ONLINE" || (await tcpProbe(c.nvr.host, c.nvr.rtspPort)) : false;
-    else if (c.host) ok = await tcpProbe(c.host, c.rtspPort);
+    if (c.protocol === "NVR_CHANNEL") ok = c.nvr ? c.nvr.status === "ONLINE" || (await reachable(c.nvr.host, c.nvr.rtspPort)) : false;
+    else if (c.host) ok = await reachable(c.host, c.rtspPort);
     else ok = false;
     await prisma.camera.update({ where: { id: c.id }, data: { status: ok ? "ONLINE" : "OFFLINE", ...(ok ? { lastSeenAt: now } : {}) } });
   });
