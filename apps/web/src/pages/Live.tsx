@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Maximize2, Video, X } from "lucide-react";
+import { Maximize2, Video, X, Info } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
 import type { Camera, CameraGroup, FloorNode } from "../types";
 import { LivePlayer } from "../components/LivePlayer";
 import { LazyVisible } from "../components/LazyVisible";
+import { RegistryPanel } from "../components/RegistryPanel";
 import { StatusDot } from "../components/ui";
 
 type Selection = { kind: "floor"; id: number } | { kind: "room"; id: number } | { kind: "group"; id: number } | { kind: "all" };
@@ -20,6 +21,7 @@ export function Live() {
   const [sel, setSel] = useState<Selection | null>(null);
   const [cols, setCols] = useState(4);
   const [focus, setFocus] = useState<Camera | null>(null);
+  const [registry, setRegistry] = useState<{ id: number; deviceNo: string } | null>(null);
   const [onlyOnline, setOnlyOnline] = useState(false);
 
   useEffect(() => {
@@ -105,7 +107,10 @@ export function Live() {
                   <span className="font-medium">{c.deviceNo}</span>
                   <span className="truncate text-zinc-400">{c.name}</span>
                 </div>
-                <button onClick={() => setFocus(c)} className="absolute right-1 top-1 z-10 rounded bg-black/60 p-1 text-zinc-300 opacity-0 hover:text-gold-300 group-hover:opacity-100" title="ขยาย"><Maximize2 size={14} /></button>
+                <div className="absolute right-1 top-1 z-10 flex gap-1 opacity-0 group-hover:opacity-100">
+                  <button onClick={() => setRegistry({ id: c.id, deviceNo: c.deviceNo })} className="rounded bg-black/60 p-1 text-zinc-300 hover:text-gold-300" title="ทะเบียน"><Info size={14} /></button>
+                  <button onClick={() => setFocus(c)} className="rounded bg-black/60 p-1 text-zinc-300 hover:text-gold-300" title="ขยาย"><Maximize2 size={14} /></button>
+                </div>
               </div>
             ))}
           </div>
@@ -115,11 +120,15 @@ export function Live() {
         <div className="fixed inset-0 z-50 flex flex-col bg-black">
           <div className="flex items-center justify-between px-4 py-2 text-sm">
             <div><span className="font-semibold text-cream">{focus.deviceNo}</span> <span className="text-zinc-400">{focus.name}</span> <span className="ml-2 text-xs text-zinc-500">{focus.floor?.name} · {focus.room?.name}</span></div>
-            <button onClick={() => setFocus(null)} className="rounded p-1 hover:bg-ink-800"><X size={18} /></button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setRegistry({ id: focus.id, deviceNo: focus.deviceNo })} className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-300 hover:bg-ink-800 hover:text-gold-300" title="ทะเบียน"><Info size={15} /> ทะเบียน</button>
+              <button onClick={() => setFocus(null)} className="rounded p-1 hover:bg-ink-800"><X size={18} /></button>
+            </div>
           </div>
           <div className="min-h-0 flex-1"><LivePlayer go2rtcUrl={focus.streams.go2rtcUrl} stream={focus.streams.main} /></div>
         </div>
       )}
+      {registry && <RegistryPanel cameraId={registry.id} deviceNo={registry.deviceNo} onClose={() => setRegistry(null)} />}
     </div>
   );
 }

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import GridLayout, { WidthProvider, type Layout as RglLayout } from "react-grid-layout";
-import { ChevronRight, Clock, Film, Pencil, Plus, Save, Search, Trash2, Tv, X, Video } from "lucide-react";
+import { ChevronRight, Clock, Film, Pencil, Plus, Save, Search, Trash2, Tv, X, Video, Info } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
 import type { Camera, FloorNode, LayoutConfig, LayoutItem, VideoLayout } from "../types";
 import { LivePlayer } from "../components/LivePlayer";
 import { LazyVisible } from "../components/LazyVisible";
 import { CameraThumb } from "../components/CameraThumb";
+import { RegistryPanel } from "../components/RegistryPanel";
 import { Button, Field, Input, Modal, StatusDot, toLocalInput } from "../components/ui";
 import { useAuth } from "../lib/auth";
 
@@ -19,7 +20,7 @@ type Mode = "live" | "playback";
 interface PlaybackStream { stream: string; go2rtcUrl: string }
 
 /** One tile: live stream, or (in playback mode) the time-boxed NVR stream once loaded. */
-function Tile({ cam, mode, playback, editing, onRemove }: { cam: Camera; mode: Mode; playback?: PlaybackStream; editing: boolean; onRemove: () => void }) {
+function Tile({ cam, mode, playback, editing, onRemove, onInfo }: { cam: Camera; mode: Mode; playback?: PlaybackStream; editing: boolean; onRemove: () => void; onInfo: () => void }) {
   const showPlayback = mode === "playback";
   return (
     <div className="group relative h-full w-full overflow-hidden rounded-lg border border-ink-800 bg-black">
@@ -37,11 +38,10 @@ function Tile({ cam, mode, playback, editing, onRemove }: { cam: Camera; mode: M
         <span className="font-medium">{cam.deviceNo}</span>
         <span className="truncate text-zinc-400">{cam.name}</span>
       </div>
-      {editing && (
-        <button onClick={onRemove} className="drag-cancel absolute right-1 top-1 z-10 rounded bg-black/70 p-1 text-zinc-300 opacity-0 hover:text-red-300 group-hover:opacity-100" title="เอาออก">
-          <X size={13} />
-        </button>
-      )}
+      <div className="absolute right-1 top-1 z-10 flex gap-1 opacity-0 group-hover:opacity-100">
+        <button onClick={onInfo} className="drag-cancel rounded bg-black/70 p-1 text-zinc-300 hover:text-gold-300" title="ทะเบียน"><Info size={13} /></button>
+        {editing && <button onClick={onRemove} className="drag-cancel rounded bg-black/70 p-1 text-zinc-300 hover:text-red-300" title="เอาออก"><X size={13} /></button>}
+      </div>
     </div>
   );
 }
@@ -65,6 +65,7 @@ export function Layouts() {
   const [dirty, setDirty] = useState(false);
   const [picker, setPicker] = useState("");
   const [saveAs, setSaveAs] = useState(false);
+  const [registry, setRegistry] = useState<{ id: number; deviceNo: string } | null>(null);
 
   // playback state
   const [pbFrom, setPbFrom] = useState(toLocalInput(new Date(Date.now() - 3600_000)));
@@ -272,7 +273,7 @@ export function Layouts() {
             >
               {itemsCams.map((cam) => (
                 <div key={String(cam.id)}>
-                  <Tile cam={cam} mode={mode} playback={pbStreams[cam.id]} editing={editing} onRemove={() => removeCamera(cam.id)} />
+                  <Tile cam={cam} mode={mode} playback={pbStreams[cam.id]} editing={editing} onRemove={() => removeCamera(cam.id)} onInfo={() => setRegistry({ id: cam.id, deviceNo: cam.deviceNo })} />
                 </div>
               ))}
             </Grid>
@@ -280,6 +281,7 @@ export function Layouts() {
         </div>
       </div>
 
+      {registry && <RegistryPanel cameraId={registry.id} deviceNo={registry.deviceNo} onClose={() => setRegistry(null)} />}
       {saveAs && (
         <Modal title="บันทึกเป็นเลย์เอาต์ใหม่" onClose={() => setSaveAs(false)}>
           <SaveAsForm onSave={(nm) => save.mutate(nm)} busy={save.isPending} />
