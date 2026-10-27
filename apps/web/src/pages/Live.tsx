@@ -80,6 +80,8 @@ export function Live() {
               <div key={c.id} className="group relative aspect-video overflow-hidden rounded bg-black">
                 {c.status === "OFFLINE" ? (
                   <div className="flex h-full items-center justify-center text-xs text-zinc-600">OFFLINE</div>
+                ) : c.protocol === "NVR_CHANNEL" && !c.nvrChannel ? (
+                  <div className="flex h-full items-center justify-center px-2 text-center text-xs text-amber-500/80">ยังไม่ระบุช่อง NVR</div>
                 ) : (
                   <LivePlayer go2rtcUrl={c.streams.go2rtcUrl} stream={c.streams.sub} />
                 )}
