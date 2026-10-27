@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Plus, RefreshCw } from "lucide-react";
+import { Database, Download, Plus, RefreshCw } from "lucide-react";
 import { api, download, qs } from "../lib/api";
 import type { Camera, FloorNode, Nvr } from "../types";
 import { Button, Field, Input, Modal, PageHeader, Select, StatusDot, Textarea, fmtDate } from "../components/ui";
 import { useAuth } from "../lib/auth";
+import { RegistryPanel } from "../components/RegistryPanel";
 
 type Form = Partial<Camera> & { password?: string };
 const PROTOCOLS = ["HIKVISION", "ONVIF", "RTSP", "NVR_CHANNEL"];
@@ -18,6 +19,7 @@ export function Cameras() {
   const tree = useQuery({ queryKey: ["locations-tree"], queryFn: () => api<FloorNode[]>("/api/locations/tree") });
   const nvrs = useQuery({ queryKey: ["nvrs"], queryFn: () => api<Nvr[]>("/api/nvrs") });
   const [edit, setEdit] = useState<Form | null>(null);
+  const [registry, setRegistry] = useState<{ id: number; deviceNo: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const save = useMutation({
@@ -37,6 +39,7 @@ export function Cameras() {
   const probe = useMutation({ mutationFn: (id: number) => api(`/api/cameras/${id}/probe`, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras"] }) });
   const healthAll = useMutation({ mutationFn: () => api("/api/system/health-check", { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras"] }) });
   const syncAll = useMutation({ mutationFn: () => api<{ synced: number; skipped: unknown[] }>("/api/system/sync-streams", { method: "POST" }), onSuccess: (r) => alert(`ลงทะเบียนสตรีมแล้ว ${r.synced} กล้อง, ข้าม ${r.skipped.length}`) });
+  const syncRegistry = useMutation({ mutationFn: () => api<{ created: number; updated: number; ipChanged: number; rediscovered: number }>("/api/registry/sync", { method: "POST" }), onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["cameras"] }); alert(`ซิงก์ทะเบียนแล้ว เพิ่ม ${r.created} อัปเดต ${r.updated} IP เปลี่ยน ${r.ipChanged} ค้นหาใหม่ ${r.rediscovered}`); } });
 
   const rooms = tree.data?.find((f) => f.id === Number(edit?.floorId))?.rooms ?? [];
   const list = (cams.data ?? []).filter((c) => !filter.flagged || c.importFlags);
@@ -46,6 +49,7 @@ export function Cameras() {
       <PageHeader title="ทะเบียนกล้อง">
         <Button variant="ghost" onClick={() => healthAll.mutate()} disabled={healthAll.isPending}><RefreshCw size={14} /> ตรวจสถานะทั้งหมด</Button>
         {can("OPERATOR") && <Button variant="ghost" onClick={() => syncAll.mutate()} disabled={syncAll.isPending}>Sync go2rtc</Button>}
+        {can("OPERATOR") && <Button variant="ghost" onClick={() => confirm("ซิงก์ข้อมูลกล้องจากทะเบียนอุปกรณ์ตอนนี้?") && syncRegistry.mutate()} disabled={syncRegistry.isPending}><Database size={14} /> {syncRegistry.isPending ? "กำลังซิงก์…" : "ซิงก์ทะเบียน"}</Button>}
         <Button variant="ghost" onClick={() => download("/api/reports/cameras.xlsx", "camera-inventory.xlsx")}><Download size={14} /> Export</Button>
         {can("ADMIN") && <Button onClick={() => setEdit({ protocol: "HIKVISION", brand: "HIKVISION", rtspPort: 554, httpPort: 80, isEnabled: true })}><Plus size={14} /> เพิ่มกล้อง</Button>}
       </PageHeader>
@@ -76,12 +80,14 @@ export function Cameras() {
                 <td className="whitespace-nowrap text-right">
                   <button className="text-xs text-zinc-400 hover:text-white" onClick={() => probe.mutate(c.id)} title={`last seen ${fmtDate(c.lastSeenAt)}`}>ตรวจ</button>
                   {can("OPERATOR") && <button className="ml-2 text-xs text-gold-400 hover:underline" onClick={() => setEdit({ ...c })}>แก้ไข</button>}
+                  <button className="ml-2 text-xs text-zinc-400 hover:text-white" onClick={() => setRegistry({ id: c.id, deviceNo: c.deviceNo })}>ทะเบียน</button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {registry && <RegistryPanel cameraId={registry.id} deviceNo={registry.deviceNo} onClose={() => setRegistry(null)} />}
       {edit && (
         <Modal title={edit.id ? `แก้ไขกล้อง ${edit.deviceNo}` : "เพิ่มกล้อง"} onClose={() => setEdit(null)} wide>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3">

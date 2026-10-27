@@ -130,6 +130,11 @@ model Camera {
   lastSeenAt     DateTime?
   sortOrder      Int       @default(0)
   /// Raw values from the legacy registry, kept for traceability
+  /// Link to the device registry (MA.DevicesMaster.ID) — the real PK on their side
+  registryId     Int?
+  owner          String?   @db.NVarChar(128)
+  secondaryIp    String?   @db.NVarChar(64)
+  registrySyncedAt DateTime?
   legacyId       Int?
   legacyNvrRef   String?   @db.NVarChar(64)
   purchaseDate   DateTime?
@@ -142,6 +147,8 @@ model Camera {
 
   groupMembers   CameraGroupMember[]
   events         Event[]
+
+  @@index([registryId])
 }
 
 model CameraGroup {

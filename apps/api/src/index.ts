@@ -14,6 +14,8 @@ import { playbackRoutes } from "./routes/playback.ts";
 import { reportRoutes } from "./routes/reports.ts";
 import { systemRoutes } from "./routes/system.ts";
 import { layoutRoutes } from "./routes/layouts.ts";
+import { registryRoutes } from "./routes/registry.ts";
+import { startRegistrySyncScheduler } from "./services/registry-sync.ts";
 import { syncAllCameras, isReachable } from "./services/go2rtc.ts";
 import { startHealthScheduler } from "./services/health.ts";
 
@@ -45,7 +47,7 @@ export const app = new Elysia()
   .get("/", () => ({ name: "cctv-platform-api", version: "0.1.0" }))
   .get("/health", () => ({ ok: true, time: new Date().toISOString() }))
   .group("/api", (g) =>
-    g.use(authRoutes).use(locationRoutes).use(nvrRoutes).use(cameraRoutes).use(groupRoutes).use(eventRoutes).use(playbackRoutes).use(reportRoutes).use(systemRoutes).use(layoutRoutes),
+    g.use(authRoutes).use(locationRoutes).use(nvrRoutes).use(cameraRoutes).use(groupRoutes).use(eventRoutes).use(playbackRoutes).use(reportRoutes).use(systemRoutes).use(layoutRoutes).use(registryRoutes),
   );
 
 if (import.meta.main) {
@@ -58,6 +60,7 @@ if (import.meta.main) {
     console.warn(`[go2rtc] not reachable at ${env.go2rtcUrl}; live streams will not be registered until it is up (POST /api/system/sync-streams)`);
   }
   startHealthScheduler();
+  startRegistrySyncScheduler();
 }
 
 export type App = typeof app;

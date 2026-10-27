@@ -13,6 +13,11 @@ export const env = {
   seedAdminUsername: process.env.SEED_ADMIN_USERNAME ?? "admin",
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? "admin1234",
   healthCheckInterval: Number(process.env.HEALTH_CHECK_INTERVAL ?? 300),
+  registryApiUrl: (process.env.REGISTRY_API_URL ?? "").replace(/\/$/, ""),
+  registrySyncInterval: Number(process.env.REGISTRY_SYNC_INTERVAL ?? 0),
+  registryCaFile: process.env.REGISTRY_CA_FILE ?? "",
+  registryJobType: process.env.REGISTRY_JOBTYPE ?? "01",
+  registryCategory: process.env.REGISTRY_CATEGORY ?? "A003",
 };
 
 if (env.appSecret.length < 32) {
