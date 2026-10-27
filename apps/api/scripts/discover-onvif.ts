@@ -31,12 +31,14 @@ const concurrency = args.includes("--concurrency") ? Number(args[args.indexOf("-
 // cams but is NOT the ONVIF service (it stalls), so it is intentionally excluded.
 const ONVIF_PORTS = [8080, 2020, 80, 8899, 443, 85, 8000, 5000];
 const RTSP_FALLBACKS = [
+  "/stander/livestream/0/0",
   "/user=admin&password={PW}&channel=1&stream=0.sdp?",
   "/cam/realmonitor?channel=1&subtype=0",
   "/live/ch0", "/live/ch00_0", "/live/main", "/11", "/0", "/1",
   "/h264/ch1/main/av_stream", "/stream1", "/Streaming/Channels/101",
 ];
 const SUB_FALLBACKS: Record<string, string> = {
+  "/stander/livestream/0/0": "/stander/livestream/0/1",
   "/user=admin&password={PW}&channel=1&stream=0.sdp?": "/user=admin&password={PW}&channel=1&stream=1.sdp?",
   "/cam/realmonitor?channel=1&subtype=0": "/cam/realmonitor?channel=1&subtype=1",
   "/Streaming/Channels/101": "/Streaming/Channels/102",
@@ -53,8 +55,14 @@ function loadPasswords(): string[] {
   return [...new Set(pws)];
 }
 
-function wsSec(user: string, pass: string) {
-  const created = new Date().toISOString();
+type AuthMode = "digest" | "text";
+/** Builds a WS-Security UsernameToken. offsetMs aligns Created to the camera's clock (the
+ *  usual cause of 401); mode "text" sends PasswordText for cameras that reject PasswordDigest. */
+function wsSec(user: string, pass: string, offsetMs = 0, mode: AuthMode = "digest") {
+  const created = new Date(Date.now() + offsetMs).toISOString();
+  if (mode === "text") {
+    return `<wsse:Security s:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>${user}</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">${pass}</wsse:Password></wsse:UsernameToken></wsse:Security>`;
+  }
   const nonce = randomBytes(16);
   const digest = createHash("sha1").update(Buffer.concat([nonce, Buffer.from(created), Buffer.from(pass)])).digest("base64");
   return `<wsse:Security s:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>${user}</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">${digest}</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">${nonce.toString("base64")}</wsse:Nonce><wsu:Created>${created}</wsu:Created></wsse:UsernameToken></wsse:Security>`;
@@ -67,35 +75,66 @@ async function soap(url: string, body: string, sec = ""): Promise<{ status: numb
   } catch { return { status: 0, text: "" }; }
 }
 
-async function findOnvifPort(host: string): Promise<{ port: number; secure: boolean } | null> {
+/** Camera clock minus local clock, from the unauthenticated GetSystemDateAndTime reply. */
+function parseClockOffset(xml: string): number {
+  const utc = /<tt:UTCDateTime>([\s\S]*?)<\/tt:UTCDateTime>/.exec(xml)?.[1] ?? xml;
+  const g = (t: string) => Number(new RegExp(`<tt:${t}>(\\d+)</tt:${t}>`).exec(utc)?.[1]);
+  const [y, mo, d, h, mi, s] = [g("Year"), g("Month"), g("Day"), g("Hour"), g("Minute"), g("Second")];
+  if (!y || !mo || !d) return 0;
+  return Date.UTC(y, mo - 1, d, h || 0, mi || 0, s || 0) - Date.now();
+}
+
+interface OnvifEndpoint { port: number; secure: boolean; base: string; offsetMs: number; }
+async function findOnvifPort(host: string): Promise<OnvifEndpoint | null> {
   for (const port of [...new Set(ONVIF_PORTS)]) {
-    // Skip closed ports instantly so cameras without ONVIF don't cost 7 SOAP timeouts.
     if (!(await tcpProbe(host, port, 800))) continue;
     const secure = port === 443 || port === 8443;
-    const url = `${secure ? "https" : "http"}://${host}:${port}/onvif/device_service`;
-    const r = await soap(url, `<GetSystemDateAndTime xmlns="http://www.onvif.org/ver10/device/wsdl"/>`);
-    if (r.status === 200 && r.text.includes("SystemDateAndTime")) return { port, secure };
+    const base = `${secure ? "https" : "http"}://${host}:${port}`;
+    const r = await soap(`${base}/onvif/device_service`, `<GetSystemDateAndTime xmlns="http://www.onvif.org/ver10/device/wsdl"/>`);
+    if (r.status === 200 && r.text.includes("SystemDateAndTime")) return { port, secure, base, offsetMs: parseClockOffset(r.text) };
   }
   return null;
 }
 
-async function getStreamUris(host: string, port: number, secure: boolean, pw: string): Promise<{ main: string; sub?: string } | null> {
-  const media = `${secure ? "https" : "http"}://${host}:${port}/onvif/media_service`;
-  const gp = await soap(media, `<trt:GetProfiles/>`, wsSec("admin", pw));
-  if (gp.status !== 200) return null;
-  const tokens = [...gp.text.matchAll(/<[^>]*Profiles[^>]*token="([^"]+)"/g)].map((m) => m[1]!);
-  if (!tokens.length) return null;
-  // Prefixed trt:/tt: namespaces are required by gSOAP/Sofia cameras (they 400 on the
-  // default-namespace form that Hikvision-ONVIF accepts).
-  const uriFor = async (tk: string) => {
-    const su = await soap(media, `<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>${tk}</trt:ProfileToken></trt:GetStreamUri>`, wsSec("admin", pw));
-    const raw = /<[^>]*:Uri>([^<]+)<\/[^>]*:Uri>|<Uri>([^<]+)<\/Uri>/.exec(su.text)?.slice(1).find(Boolean);
-    return raw ? decodeEntities(raw) : null;
-  };
-  const main = await uriFor(tokens[0]!);
-  if (!main) return null;
-  const sub = tokens[1] ? await uriFor(tokens[1]!) : undefined;
-  return { main, sub: sub ?? undefined };
+/** Resolves the Media service address from GetCapabilities, rewriting its host to the one we
+ *  reached the camera on (devices often advertise a stale or 0.0.0.0 XAddr). */
+async function resolveMediaUrl(ep: OnvifEndpoint, host: string, sec: string): Promise<string> {
+  const def = `${ep.base}/onvif/media_service`;
+  const caps = await soap(`${ep.base}/onvif/device_service`, `<GetCapabilities xmlns="http://www.onvif.org/ver10/device/wsdl"><Category>Media</Category></GetCapabilities>`, sec);
+  const xaddr = [...caps.text.matchAll(/XAddr>([^<]+)/g)].map((m) => decodeEntities(m[1]!)).find((u) => /media/i.test(u));
+  if (!xaddr) return def;
+  try {
+    const u = new URL(xaddr);
+    u.hostname = host; // trust the reachable host, keep the advertised port + path
+    return u.toString();
+  } catch { return def; }
+}
+
+async function getStreamUris(host: string, ep: OnvifEndpoint, pw: string): Promise<{ main: string; sub?: string } | null> {
+  // Try auth variants in order: clock-synced digest, plaintext, un-synced digest.
+  const variants: Array<{ offset: number; mode: AuthMode }> = [
+    { offset: ep.offsetMs, mode: "digest" },
+    { offset: ep.offsetMs, mode: "text" },
+    { offset: 0, mode: "digest" },
+  ];
+  for (const v of variants) {
+    const sec = () => wsSec("admin", pw, v.offset, v.mode);
+    const media = await resolveMediaUrl(ep, host, sec());
+    const gp = await soap(media, `<trt:GetProfiles/>`, sec());
+    if (gp.status !== 200) continue;
+    const tokens = [...gp.text.matchAll(/<[^>]*Profiles[^>]*token="([^"]+)"/g)].map((m) => m[1]!);
+    if (!tokens.length) continue;
+    const uriFor = async (tk: string) => {
+      const su = await soap(media, `<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>${tk}</trt:ProfileToken></trt:GetStreamUri>`, sec());
+      const raw = /<[^>]*:Uri>([^<]+)<\/[^>]*:Uri>|<Uri>([^<]+)<\/Uri>/.exec(su.text)?.slice(1).find(Boolean);
+      return raw ? decodeEntities(raw) : null;
+    };
+    const main = await uriFor(tokens[0]!);
+    if (!main) continue;
+    const sub = tokens[1] ? await uriFor(tokens[1]!) : undefined;
+    return { main, sub: sub ?? undefined };
+  }
+  return null;
 }
 
 const decodeEntities = (s: string) =>
@@ -122,7 +161,7 @@ async function discover(host: string, httpPortHint: number, pws: string[]): Prom
   const onvif = await findOnvifPort(host);
   if (onvif) {
     for (let i = 0; i < pws.length; i++) {
-      const uris = await getStreamUris(host, onvif.port, onvif.secure, pws[i]!);
+      const uris = await getStreamUris(host, onvif, pws[i]!);
       if (uris) {
         const u = new URL(uris.main);
         const rtspPort = Number(u.port) || 554;
