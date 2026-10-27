@@ -23,21 +23,26 @@ const outFile = process.argv[2] ?? resolve(registryDir, "ทะเบียน C
 
 const upDown = (s: string) => (s === "ONLINE" ? "Up" : s === "OFFLINE" ? "Down" : "ไม่ทราบ");
 
-function noteFor(d: { kind: "cam" | "nvr"; protocol?: string; nvrChannel?: number | null; importFlags?: string | null; brand?: string; hasPw: boolean; status: string; matched: boolean }): string {
-  const n: string[] = [];
-  if (d.kind === "nvr") {
-    if (!d.matched) n.push("รหัสไม่ตรง 3 ตัว หรือพอร์ตบนเครื่องไม่ใช่ 80 — ตรวจหน้างาน");
-    return n.join("; ");
-  }
-  if (d.protocol === "NVR_CHANNEL") {
-    if (!d.nvrChannel) n.push("Plug&Play: ใส่หมายเลขช่องบน NVR");
-  }
-  if (d.importFlags?.includes("NVR_UNMAPPED")) n.push("NVR ที่อ้างถึงไม่มีในทะเบียน");
-  if (d.importFlags?.includes("NVR_MISSING")) n.push("ยังไม่ผูก NVR");
-  if (d.protocol === "ONVIF" && d.status !== "ONLINE") n.push("ONVIF ไม่ตอบ — ตรวจ IP/พอร์ต");
-  if (d.protocol === "ONVIF" && d.status === "ONLINE" && (d.brand === "BELKO" || d.brand === "UNKNOWN")) n.push("RTSP 554 เปิดอยู่แต่ path ONVIF ไม่ทราบ — ขอ RTSP path ของกล้อง");
-  if (d.protocol === "HIKVISION" && d.status === "ONLINE" && !d.matched) n.push("Hikvision แต่รหัสทั้ง 3 ตัวไม่ผ่าน — อาจใช้รหัสอื่น");
-  return n.join("; ");
+/** True when the system has everything it needs to pull this camera's stream. */
+function configReady(c: { protocol: string; mainStreamPath: string | null; passwordEnc: string | null; nvrChannel: number | null }): boolean {
+  if (c.protocol === "RTSP") return !!c.mainStreamPath;
+  if (c.protocol === "HIKVISION") return !!c.passwordEnc;
+  if (c.protocol === "NVR_CHANNEL") return !!c.nvrChannel;
+  return false;
+}
+
+function camNote(c: { protocol: string; status: string; mainStreamPath: string | null; passwordEnc: string | null; nvrChannel: number | null }): string {
+  const ready = configReady(c);
+  if (ready && c.status === "ONLINE") return ""; // streaming, nothing to do
+  if (c.protocol === "NVR_CHANNEL" && !c.nvrChannel) return "Plug&Play: กรอกเลขช่องในคอลัมน์ 'กรอกช่อง NVR ตรงนี้'";
+  if (c.status !== "ONLINE") return "กล้องออฟไลน์ — ตรวจหน้างาน (กล้องเสีย / IP เปลี่ยน / ปิดเครื่อง)";
+  if (c.protocol === "ONVIF") return "ONVIF ยังเจาะไม่ได้ — ต้องการรหัสตัวที่ 4 หรือเปิด ONVIF ในกล้อง / บอก RTSP path";
+  if (ready && c.status !== "ONLINE") return "ตั้งค่าแล้วแต่ตอนนี้ออฟไลน์";
+  return "ตรวจสอบการตั้งค่า";
+}
+
+function nvrNote(n: { status: string }): string {
+  return n.status === "ONLINE" ? "" : "NVR ออฟไลน์ / รหัสไม่ตรง 3 ตัว — ตรวจหน้างาน";
 }
 
 async function main() {
@@ -59,23 +64,31 @@ async function main() {
       if (n) {
         row.UserLogin = n.username ?? "admin";
         row.Password = (await decryptSecret(n.passwordEnc)) ?? "";
-        const matched = n.status === "ONLINE";
+        row["สตรีมได้แล้ว"] = "";
         row["สถานะ Up/Down"] = upDown(n.status);
+        row["โปรโตคอล (ระบบ)"] = "NVR";
+        row["NVR ที่ผูก"] = "";
+        row["ช่อง NVR"] = "";
+        row["กรอกช่อง NVR ตรงนี้"] = "";
         row["พอร์ต HTTP (LAN)"] = n.httpPort;
-        row["ต้องแก้ไข"] = noteFor({ kind: "nvr", hasPw: !!n.passwordEnc, status: n.status, matched });
+        row["ต้องแก้ไข"] = nvrNote(n);
         nvrFilled++;
       }
     } else {
       const c = camByDev.get(dev);
       if (c) {
         const pw = await decryptSecret(c.passwordEnc);
+        const streaming = configReady(c) && c.status === "ONLINE";
         row.UserLogin = c.username ?? "admin";
         row.Password = pw ?? "";
+        row["สตรีมได้แล้ว"] = streaming ? "ใช่" : "ยัง";
         row["สถานะ Up/Down"] = upDown(c.status);
-        row["โปรโตคอล (ระบบ)"] = c.protocol;
-        row["ช่อง NVR"] = c.nvrChannel ?? "";
+        row["โปรโตคอล (ระบบ)"] = c.protocol === "NVR_CHANNEL" ? "Plug&Play (ผ่าน NVR)" : c.protocol;
         row["NVR ที่ผูก"] = c.nvr?.name ?? "";
-        row["ต้องแก้ไข"] = noteFor({ kind: "cam", protocol: c.protocol, nvrChannel: c.nvrChannel, importFlags: c.importFlags, brand: c.brand, hasPw: !!c.passwordEnc, status: c.status, matched: c.status === "ONLINE" && !!c.passwordEnc });
+        row["ช่อง NVR"] = c.nvrChannel ?? "";
+        // Blank input column for the operator to fill the plug&play channel; "-" for the rest.
+        row["กรอกช่อง NVR ตรงนี้"] = c.protocol === "NVR_CHANNEL" ? (c.nvrChannel ?? "") : "-";
+        row["ต้องแก้ไข"] = camNote(c);
         camFilled++;
       }
     }
@@ -83,7 +96,7 @@ async function main() {
 
   // Explicit column order: original meaningful columns, then the new system columns right
   // after Password; drop the blank __EMPTY columns that the source file carried.
-  const NEW_COLS = ["สถานะ Up/Down", "โปรโตคอล (ระบบ)", "NVR ที่ผูก", "ช่อง NVR", "พอร์ต HTTP (LAN)", "ต้องแก้ไข"];
+  const NEW_COLS = ["สตรีมได้แล้ว", "สถานะ Up/Down", "โปรโตคอล (ระบบ)", "NVR ที่ผูก", "ช่อง NVR", "กรอกช่อง NVR ตรงนี้", "พอร์ต HTTP (LAN)", "ต้องแก้ไข"];
   const srcCols = (Object.keys(rows[0] ?? {})).filter((k) => !k.startsWith("__EMPTY") && !NEW_COLS.includes(k));
   const pwIdx = srcCols.indexOf("Password");
   const ordered = pwIdx >= 0 ? [...srcCols.slice(0, pwIdx + 1), ...NEW_COLS, ...srcCols.slice(pwIdx + 1)] : [...srcCols, ...NEW_COLS];
@@ -98,14 +111,18 @@ async function main() {
   XLSX.utils.book_append_sheet(outWb, outWs, "ทะเบียน");
 
   // summary sheet
+  const streamingCams = cams.filter((c) => configReady(c) && c.status === "ONLINE");
+  const plugWaiting = cams.filter((c) => c.protocol === "NVR_CHANNEL" && !c.nvrChannel);
+  const onvifLeft = cams.filter((c) => c.protocol === "ONVIF");
   const summary = [
-    { รายการ: "กล้องทั้งหมด", จำนวน: cams.length },
-    { รายการ: "กล้อง Up", จำนวน: cams.filter((c) => c.status === "ONLINE").length },
-    { รายการ: "กล้อง Down", จำนวน: cams.filter((c) => c.status === "OFFLINE").length },
-    { รายการ: "กล้องมีรหัสในระบบ", จำนวน: cams.filter((c) => c.passwordEnc).length },
+    { รายการ: "กล้องทั้งหมด (เปิดใช้งาน)", จำนวน: cams.filter((c) => c.isEnabled).length },
+    { รายการ: "สตรีมได้แล้ว (ขึ้นภาพ)", จำนวน: streamingCams.length },
+    { รายการ: "Plug&Play รอกรอกเลขช่อง NVR", จำนวน: plugWaiting.length },
+    { รายการ: "ONVIF ยังเจาะไม่ได้ (รอรหัส#4 / เปิด ONVIF)", จำนวน: onvifLeft.length },
+    { รายการ: "กล้อง Up (เครือข่าย)", จำนวน: cams.filter((c) => c.status === "ONLINE").length },
+    { รายการ: "กล้อง Down (เครือข่าย)", จำนวน: cams.filter((c) => c.status === "OFFLINE").length },
     { รายการ: "NVR ทั้งหมด", จำนวน: nvrs.length },
     { รายการ: "NVR Up", จำนวน: nvrs.filter((n) => n.status === "ONLINE").length },
-    { รายการ: "NVR มีรหัสในระบบ", จำนวน: nvrs.filter((n) => n.passwordEnc).length },
   ];
   XLSX.utils.book_append_sheet(outWb, XLSX.utils.json_to_sheet(summary), "สรุป");
 

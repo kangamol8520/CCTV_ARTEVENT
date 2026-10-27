@@ -18,6 +18,7 @@ import { encryptSecret } from "../src/lib/crypto.ts";
 import { env } from "../src/lib/env.ts";
 import { syncCamera } from "../src/services/go2rtc.ts";
 import { tcpProbe } from "../src/services/health.ts";
+import { digestFetch } from "../src/services/hikvision.ts";
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
@@ -156,7 +157,28 @@ function rtspAuthority(host: string, port: number, user: string, pw: string, pat
 
 interface Found { protocol: "RTSP"; host: string; rtspPort: number; httpPort: number; main: string; sub: string; pwIndex: number; via: string; }
 
+/** Hikvision cameras often ship with ONVIF disabled (ONVIF GetProfiles 401) while ISAPI + RTSP
+ *  work directly with the web password. Detect them via ISAPI and use the Hikvision RTSP paths. */
+async function tryHikvision(host: string, httpPortHint: number, pws: string[]): Promise<Found | null> {
+  const ports = [...new Set([80, httpPortHint].filter((p) => p && p > 0))];
+  for (const port of ports) {
+    if (!(await tcpProbe(host, port, 800))) continue;
+    for (let i = 0; i < pws.length; i++) {
+      try {
+        const r = await digestFetch(`http://${host}:${port}/ISAPI/System/deviceInfo`, "admin", pws[i]!, { method: "GET" });
+        if (r.status === 200) {
+          return { protocol: "RTSP", host, rtspPort: 554, httpPort: port, main: "/Streaming/Channels/101", sub: "/Streaming/Channels/102", pwIndex: i, via: `isapi:${port}` };
+        }
+      } catch { /* try next */ }
+    }
+  }
+  return null;
+}
+
 async function discover(host: string, httpPortHint: number, pws: string[]): Promise<Found | null> {
+  // 0) Hikvision ISAPI (fast, definitive; catches Hikvision cams mislabeled ONVIF with ONVIF off)
+  const hik = await tryHikvision(host, httpPortHint, pws);
+  if (hik) return hik;
   // 1) ONVIF discovery (preferred — exact URLs straight from the device)
   const onvif = await findOnvifPort(host);
   if (onvif) {
