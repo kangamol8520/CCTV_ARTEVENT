@@ -159,17 +159,28 @@ interface Found { protocol: "RTSP"; host: string; rtspPort: number; httpPort: nu
 
 /** Hikvision cameras often ship with ONVIF disabled (ONVIF GetProfiles 401) while ISAPI + RTSP
  *  work directly with the web password. Detect them via ISAPI and use the Hikvision RTSP paths. */
+/** ISAPI auth check that handles both Digest and HTTP Basic (older DS-2CD2xxx use Basic). */
+async function isapiAuthOk(host: string, port: number, pw: string): Promise<boolean> {
+  const url = `http://${host}:${port}/ISAPI/System/deviceInfo`;
+  try {
+    const basic = await fetch(url, { headers: { Authorization: "Basic " + Buffer.from(`admin:${pw}`).toString("base64") }, signal: AbortSignal.timeout(5000) });
+    if (basic.status === 200) return true;
+  } catch { /* fall through */ }
+  try {
+    const dig = await digestFetch(url, "admin", pw, { method: "GET" });
+    if (dig.status === 200) return true;
+  } catch { /* fall through */ }
+  return false;
+}
+
 async function tryHikvision(host: string, httpPortHint: number, pws: string[]): Promise<Found | null> {
   const ports = [...new Set([80, httpPortHint].filter((p) => p && p > 0))];
   for (const port of ports) {
     if (!(await tcpProbe(host, port, 800))) continue;
     for (let i = 0; i < pws.length; i++) {
-      try {
-        const r = await digestFetch(`http://${host}:${port}/ISAPI/System/deviceInfo`, "admin", pws[i]!, { method: "GET" });
-        if (r.status === 200) {
-          return { protocol: "RTSP", host, rtspPort: 554, httpPort: port, main: "/Streaming/Channels/101", sub: "/Streaming/Channels/102", pwIndex: i, via: `isapi:${port}` };
-        }
-      } catch { /* try next */ }
+      if (await isapiAuthOk(host, port, pws[i]!)) {
+        return { protocol: "RTSP", host, rtspPort: 554, httpPort: port, main: "/Streaming/Channels/101", sub: "/Streaming/Channels/102", pwIndex: i, via: `isapi:${port}` };
+      }
     }
   }
   return null;
