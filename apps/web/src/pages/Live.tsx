@@ -96,7 +96,7 @@ export function Live() {
                 ) : c.protocol === "NVR_CHANNEL" && !c.nvrChannel ? (
                   <div className="flex h-full items-center justify-center px-2 text-center text-xs text-amber-500/80">ยังไม่ระบุช่อง NVR</div>
                 ) : (
-                  <LazyVisible className="absolute inset-0 h-full w-full" placeholder={<div className="grid h-full w-full place-items-center text-ink-600"><Video size={20} className="opacity-30" /></div>}>
+                  <LazyVisible className="absolute inset-0 h-full w-full" rootMargin="200px" placeholder={<div className="grid h-full w-full place-items-center text-ink-600"><Video size={20} className="opacity-30" /></div>}>
                     <LivePlayer go2rtcUrl={c.streams.go2rtcUrl} stream={c.streams.sub} />
                   </LazyVisible>
                 )}

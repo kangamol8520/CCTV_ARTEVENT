@@ -3,11 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Wrench } from "lucide-react";
 import { api } from "../lib/api";
 import { Button, Field, Input, Modal, Select } from "./ui";
+import clsx from "clsx";
 import { useAuth } from "../lib/auth";
 
 interface RegistryResp { linked: boolean; registryId?: number; detail?: { dataDevice?: Record<string, unknown>; UserLogin?: { UserLogin?: string; LoginType?: string }[] } }
+interface Repair { BillDoc?: string; JobDate?: string; FinishDate?: string; StatusName?: string; BrokenDes?: string; RepairDes?: string; EmpFullName?: string; RepairPrice?: number; PartPrice?: number }
 const s = (v: unknown) => (v === null || v === undefined || v === "" ? "-" : String(v));
 const d = (v: unknown) => { const x = v ? new Date(String(v)) : null; return x && !isNaN(x.getTime()) && x.getFullYear() > 2000 ? x.toLocaleDateString("th-TH") : "-"; };
+const dt = (v: unknown) => { const x = v ? new Date(String(v)) : null; return x && !isNaN(x.getTime()) && x.getFullYear() > 2000 ? x.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" }) : "-"; };
 
 /** View + edit the device-registry record for a camera (write-back to webae). */
 export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: number; deviceNo: string; onClose: () => void }) {
@@ -15,7 +18,7 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
   const { can } = useAuth();
   const reg = useQuery({ queryKey: ["registry", cameraId], queryFn: () => api<RegistryResp>(`/api/registry/cameras/${cameraId}`) });
   const [edit, setEdit] = useState<{ IPv4_1: string; Desciption: string; Status1: string } | null>(null);
-  const [repairs, setRepairs] = useState<unknown[] | null>(null);
+  const [repairs, setRepairs] = useState<Repair[] | null>(null);
 
   const dd = reg.data?.detail?.dataDevice ?? {};
   const save = useMutation({
@@ -23,7 +26,7 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["registry", cameraId] }); qc.invalidateQueries({ queryKey: ["cameras"] }); setEdit(null); alert(r.ipChanged ? "บันทึกแล้ว IP เปลี่ยน กำลังค้นหาการเชื่อมต่อใหม่" : "บันทึกกลับไปที่ทะเบียนแล้ว"); },
     onError: (e) => alert((e as Error).message),
   });
-  const loadRepairs = useMutation({ mutationFn: () => api<unknown[]>(`/api/registry/cameras/${cameraId}/repairs`), onSuccess: (r) => setRepairs(Array.isArray(r) ? r : []) });
+  const loadRepairs = useMutation({ mutationFn: () => api<Repair[]>(`/api/registry/cameras/${cameraId}/repairs`), onSuccess: (r) => setRepairs(Array.isArray(r) ? r : []) });
 
   const Row = ({ label, value }: { label: string; value: unknown }) => (
     <div className="flex justify-between gap-4 border-b border-ink-800/70 py-1.5 text-sm"><span className="text-zinc-500">{label}</span><span className="text-right text-zinc-200">{value as string}</span></div>
@@ -54,8 +57,35 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
             {can("OPERATOR") && <Button variant="gold" onClick={() => setEdit({ IPv4_1: s(dd.IPv4_1) === "-" ? "" : String(dd.IPv4_1), Desciption: s(dd.Desciption) === "-" ? "" : String(dd.Desciption), Status1: String(dd.Status1 ?? "0") })}>แก้ไขทะเบียน</Button>}
           </div>
           {repairs && (
-            <div className="mt-3 max-h-40 overflow-auto rounded border border-ink-800 p-2 text-xs text-zinc-400">
-              {repairs.length === 0 ? "ไม่มีประวัติแจ้งซ่อม" : repairs.map((r, i) => <div key={i} className="border-b border-ink-800/60 py-1">{JSON.stringify(r).slice(0, 160)}</div>)}
+            <div className="mt-3">
+              <div className="mb-1.5 text-xs font-medium text-zinc-400">ประวัติแจ้งซ่อม {repairs.length > 0 && `(${repairs.length})`}</div>
+              {repairs.length === 0 ? (
+                <div className="rounded-lg border border-ink-800 p-3 text-xs text-zinc-600">ไม่มีประวัติแจ้งซ่อม</div>
+              ) : (
+                <div className="max-h-60 space-y-2 overflow-auto pr-1">
+                  {repairs.map((r, i) => {
+                    const done = /เสร็จ|สำเร็จ|ปิด/.test(r.StatusName ?? "");
+                    return (
+                      <div key={i} className="rounded-lg border border-ink-800 bg-ink-850 p-3 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-zinc-300">{s(r.BillDoc)}</span>
+                          <span className={clsx("rounded px-1.5 py-0.5 text-[10px]", done ? "bg-emerald-900/50 text-emerald-300" : "bg-amber-900/50 text-amber-200")}>{s(r.StatusName)}</span>
+                        </div>
+                        <div className="mt-1.5 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                          <div><span className="text-zinc-500">แจ้งเมื่อ </span><span className="text-zinc-300">{dt(r.JobDate)}</span></div>
+                          <div><span className="text-zinc-500">เสร็จเมื่อ </span><span className="text-zinc-300">{dt(r.FinishDate)}</span></div>
+                        </div>
+                        {r.BrokenDes && <div className="mt-1.5"><span className="text-zinc-500">อาการ: </span><span className="text-zinc-200">{r.BrokenDes}</span></div>}
+                        {r.RepairDes && <div><span className="text-zinc-500">การซ่อม: </span><span className="text-zinc-200">{r.RepairDes}</span></div>}
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-zinc-500">
+                          <span>ผู้แจ้ง: {s(r.EmpFullName)}</span>
+                          {((r.RepairPrice ?? 0) + (r.PartPrice ?? 0)) > 0 && <span>ค่าใช้จ่าย {(((r.RepairPrice ?? 0) + (r.PartPrice ?? 0))).toLocaleString("th-TH")} บาท</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -69,7 +99,7 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
           <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEdit(null)}>ยกเลิก</Button><Button variant="gold" disabled={save.isPending} onClick={() => save.mutate(edit)}>บันทึกกลับทะเบียน</Button></div>
         </div>
       )}
-      <div className="mt-4 text-right text-[11px] text-zinc-600"><ExternalLink size={10} className="mr-1 inline" />ข้อมูลจากระบบทะเบียนอุปกรณ์ webae</div>
+      <div className="mt-4 text-right text-[11px] text-zinc-600"><ExternalLink size={10} className="mr-1 inline" />ข้อมูลสดจากระบบทะเบียนอุปกรณ์ webae · ซิงก์อัตโนมัติทุก 5 นาที</div>
     </Modal>
   );
 }

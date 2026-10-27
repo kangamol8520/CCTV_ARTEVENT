@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import GridLayout, { WidthProvider, type Layout as RglLayout } from "react-grid-layout";
-import { ChevronRight, Clock, Film, Pencil, Plus, Save, Search, Trash2, Tv, X } from "lucide-react";
+import { ChevronRight, Clock, Film, Pencil, Plus, Save, Search, Trash2, Tv, X, Video } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
 import type { Camera, FloorNode, LayoutConfig, LayoutItem, VideoLayout } from "../types";
 import { LivePlayer } from "../components/LivePlayer";
+import { LazyVisible } from "../components/LazyVisible";
 import { CameraThumb } from "../components/CameraThumb";
 import { Button, Field, Input, Modal, StatusDot, toLocalInput } from "../components/ui";
 import { useAuth } from "../lib/auth";
@@ -27,7 +28,9 @@ function Tile({ cam, mode, playback, editing, onRemove }: { cam: Camera; mode: M
       ) : showPlayback ? (
         playback ? <LivePlayer go2rtcUrl={playback.go2rtcUrl} stream={playback.stream} mode="mse" controls /> : <div className="grid h-full place-items-center text-xs text-zinc-600">รอโหลดย้อนหลัง…</div>
       ) : (
-        <LivePlayer go2rtcUrl={cam.streams.go2rtcUrl} stream={cam.streams.sub} />
+        <LazyVisible className="absolute inset-0 h-full w-full" rootMargin="200px" placeholder={<div className="grid h-full w-full place-items-center text-ink-600"><Video size={18} className="opacity-30" /></div>}>
+          <LivePlayer go2rtcUrl={cam.streams.go2rtcUrl} stream={cam.streams.sub} />
+        </LazyVisible>
       )}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-1.5 bg-gradient-to-b from-black/80 to-transparent px-2 py-1 text-[11px] text-zinc-200">
         <StatusDot status={cam.status} />

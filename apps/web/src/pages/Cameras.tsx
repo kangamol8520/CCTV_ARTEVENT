@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Download, Plus, RefreshCw } from "lucide-react";
+import { Download, Plus, RefreshCw } from "lucide-react";
 import { api, download, qs } from "../lib/api";
 import type { Camera, FloorNode, Nvr } from "../types";
 import { Button, Field, Input, Modal, PageHeader, Select, StatusDot, Textarea, fmtDate } from "../components/ui";
@@ -39,7 +39,6 @@ export function Cameras() {
   const probe = useMutation({ mutationFn: (id: number) => api(`/api/cameras/${id}/probe`, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras"] }) });
   const healthAll = useMutation({ mutationFn: () => api("/api/system/health-check", { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras"] }) });
   const syncAll = useMutation({ mutationFn: () => api<{ synced: number; skipped: unknown[] }>("/api/system/sync-streams", { method: "POST" }), onSuccess: (r) => alert(`ลงทะเบียนสตรีมแล้ว ${r.synced} กล้อง, ข้าม ${r.skipped.length}`) });
-  const syncRegistry = useMutation({ mutationFn: () => api<{ created: number; updated: number; ipChanged: number; rediscovered: number }>("/api/registry/sync", { method: "POST" }), onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["cameras"] }); alert(`ซิงก์ทะเบียนแล้ว เพิ่ม ${r.created} อัปเดต ${r.updated} IP เปลี่ยน ${r.ipChanged} ค้นหาใหม่ ${r.rediscovered}`); } });
 
   const rooms = tree.data?.find((f) => f.id === Number(edit?.floorId))?.rooms ?? [];
   const list = (cams.data ?? []).filter((c) => !filter.flagged || c.importFlags);
@@ -49,7 +48,6 @@ export function Cameras() {
       <PageHeader title="ทะเบียนกล้อง">
         <Button variant="ghost" onClick={() => healthAll.mutate()} disabled={healthAll.isPending}><RefreshCw size={14} /> ตรวจสถานะทั้งหมด</Button>
         {can("OPERATOR") && <Button variant="ghost" onClick={() => syncAll.mutate()} disabled={syncAll.isPending}>Sync go2rtc</Button>}
-        {can("OPERATOR") && <Button variant="ghost" onClick={() => confirm("ซิงก์ข้อมูลกล้องจากทะเบียนอุปกรณ์ตอนนี้?") && syncRegistry.mutate()} disabled={syncRegistry.isPending}><Database size={14} /> {syncRegistry.isPending ? "กำลังซิงก์…" : "ซิงก์ทะเบียน"}</Button>}
         <Button variant="ghost" onClick={() => download("/api/reports/cameras.xlsx", "camera-inventory.xlsx")}><Download size={14} /> Export</Button>
         {can("ADMIN") && <Button onClick={() => setEdit({ protocol: "HIKVISION", brand: "HIKVISION", rtspPort: 554, httpPort: 80, isEnabled: true })}><Plus size={14} /> เพิ่มกล้อง</Button>}
       </PageHeader>
