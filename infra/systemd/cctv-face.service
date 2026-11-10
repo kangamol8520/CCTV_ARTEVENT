@@ -1,0 +1,23 @@
+# CCTV face entry/exit worker (apps/face/worker.py, Phase 3). Reads cameras with faceEnabled from
+# the API, posts AccessEvents back. Needs apps/face/.venv (uv) and data/face/gallery.npz (enroll.py).
+[Unit]
+Description=CCTV face entry/exit worker (InsightFace, CPU)
+After=network-online.target cctv-api.service
+Wants=network-online.target
+
+[Service]
+User=adminae
+WorkingDirectory=/home/adminae/CCTV/apps/face
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=FACE_THREADS=4
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/adminae/CCTV/apps/face/.venv/bin/python worker.py
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+# keep the recorder and API responsive when many faces are in view
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

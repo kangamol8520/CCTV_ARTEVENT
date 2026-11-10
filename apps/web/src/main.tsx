@@ -13,6 +13,7 @@ import { Live } from "./pages/Live";
 import { Layouts } from "./pages/Layouts";
 import { Playback } from "./pages/Playback";
 import { Recordings } from "./pages/Recordings";
+import { Access } from "./pages/Access";
 import { Events } from "./pages/Events";
 import { Cameras } from "./pages/Cameras";
 import { Groups } from "./pages/Groups";
@@ -39,6 +40,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="layouts" element={<Layouts />} />
               <Route path="playback" element={<Playback />} />
               <Route path="recordings" element={<Recordings />} />
+              <Route path="access" element={<Access />} />
               <Route path="events" element={<Events />} />
               <Route path="cameras" element={<Cameras />} />
               <Route path="groups" element={<Groups />} />

@@ -150,9 +150,17 @@ model Camera {
   /// Which go2rtc stream to record: MAIN | SUB
   recordStream   String    @default("MAIN") @db.NVarChar(8)
 
+  /// Face entry/exit log (Phase 3): when true the face worker (apps/face/worker.py) watches this camera
+  faceEnabled    Boolean   @default(false)
+  /// IN | OUT — which way people walk past this camera
+  faceDirection  String?   @db.NVarChar(8)
+  /// Detection zone as fractions of the frame "x0,y0,x1,y1" (0..1); null = whole frame
+  faceZone       String?   @db.NVarChar(64)
+
   groupMembers   CameraGroupMember[]
   events         Event[]
   recordings     Recording[]
+  accessEvents   AccessEvent[]
 
   @@index([registryId])
 }
@@ -246,4 +254,37 @@ model Recording {
 
   @@index([cameraId, startedAt])
   @@index([startedAt])
+}
+
+/// One person passing a face camera (one tracked face), written by the face worker via the API.
+/// No face templates are stored here — only the matched code, scores and a snapshot crop
+/// (snapshotPath is relative to FACE_DATA_DIR). Times are UTC.
+model AccessEvent {
+  id           Int      @id @default(autoincrement())
+  cameraId     Int
+  camera       Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  /// IN | OUT (copied from the camera at the time of the event)
+  direction    String   @db.NVarChar(8)
+  /// MATCHED (confident) | UNCERTAIN (best guess, needs review) | UNKNOWN
+  status       String   @db.NVarChar(16)
+  empCode      String?  @db.NVarChar(32)
+  empName      String?  @db.NVarChar(200)
+  similarity   Float
+  /// top-1 minus top-2 similarity
+  margin       Float
+  /// JSON [{code,name,sim}] top-3, for review
+  candidates   String?  @db.NVarChar(2000)
+  firstSeenAt  DateTime
+  lastSeenAt   DateTime
+  frames       Int
+  faceSize     Int
+  snapshotPath String?  @db.NVarChar(400)
+  /// Set when a person corrects the match in the UI
+  reviewedById Int?
+  reviewedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([firstSeenAt])
+  @@index([cameraId, firstSeenAt])
+  @@index([empCode, firstSeenAt])
 }

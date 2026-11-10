@@ -28,6 +28,10 @@ export const env = {
   recordingMinFreeGb: Number(process.env.RECORDING_MIN_FREE_GB ?? 50),
   /** RTSP base of go2rtc as seen by the recorder (records the restream, so cameras get no extra connection). */
   go2rtcRtspUrl: (process.env.GO2RTC_RTSP_URL ?? "rtsp://127.0.0.1:8554").replace(/\/$/, ""),
+  /** Face entry/exit log (Phase 3): worker output (gallery, event snapshots). Default <repo>/data/face. */
+  faceDataDir: resolve(process.env.FACE_DATA_DIR ?? resolve(import.meta.dir, "../../../../data/face")),
+  /** Employee master (Emp.json + photos/) — personal data, never in git. Default <repo>/data/employees. */
+  employeesDir: resolve(process.env.EMPLOYEES_DIR ?? resolve(import.meta.dir, "../../../../data/employees")),
 };
 
 if (env.appSecret.length < 32) {

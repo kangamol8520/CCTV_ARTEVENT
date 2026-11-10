@@ -12,3 +12,7 @@ registry/*.xlsx
 infra/go2rtc/go2rtc.yaml
 .claude/
 apps/api/certs/
+registry/*.json
+# Employee personal data (names, face photos) — never commit
+Emp.json
+Employee/

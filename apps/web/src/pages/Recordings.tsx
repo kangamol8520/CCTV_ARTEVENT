@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Camera as CameraIcon, Download, Pause, Play, Square, Circle } from "lucide-react";
 import clsx from "clsx";
+import { useSearchParams } from "react-router-dom";
 import { api, API_URL, download } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Camera } from "../types";
@@ -155,8 +156,11 @@ export function Recordings() {
   const status = useQuery({ queryKey: ["recordings", "status"], queryFn: () => api<RecStatus>("/api/recordings/status"), refetchInterval: 15000 });
   const recCams = useMemo(() => status.data?.cameras.filter((c) => c.files > 0 || c.recordEnabled) ?? [], [status.data]);
 
-  const [cameraId, setCameraId] = useState<number | "">("");
-  const [day, setDay] = useState(localDay(new Date()));
+  // Deep link from other pages (e.g. บันทึกเข้า-ออก): /recordings?cam=<id>&t=<epoch ms>
+  const [params, setParams] = useSearchParams();
+  const linkT = params.get("t") ? Number(params.get("t")) : null;
+  const [cameraId, setCameraId] = useState<number | "">(params.get("cam") ? Number(params.get("cam")) : "");
+  const [day, setDay] = useState(localDay(linkT ? new Date(linkT) : new Date()));
   useEffect(() => { if (cameraId === "" && recCams[0]) setCameraId(recCams[0].id); }, [recCams, cameraId]);
   const cam = recCams.find((c) => c.id === cameraId);
 
@@ -198,6 +202,17 @@ export function Recordings() {
     }
   }, [segsQ.data, cur]);
 
+  const [zoomHour, setZoomHour] = useState<number | null>(null);
+  const pendingSeek = useRef(linkT);
+  useEffect(() => {
+    if (pendingSeek.current === null || !segsQ.data?.length) return;
+    const t = pendingSeek.current;
+    pendingSeek.current = null;
+    setZoomHour(Math.floor((t - from) / HOUR) * HOUR + from);
+    seek(t);
+    setParams({}, { replace: true });
+  }, [segsQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const next = () => {
     if (!curSeg) return;
     const i = segs.findIndex((s) => s.id === curSeg.id);
@@ -206,7 +221,6 @@ export function Recordings() {
     else setPlaying(false);
   };
 
-  const [zoomHour, setZoomHour] = useState<number | null>(null);
   const zFrom = zoomHour ?? (cursor !== null ? Math.floor((cursor - from) / HOUR) * HOUR + from : spans.at(-1) ? Math.floor((spans.at(-1)!.e - 1 - from) / HOUR) * HOUR + from : from);
   const seekAndZoom = (t: number) => { setZoomHour(Math.floor((t - from) / HOUR) * HOUR + from); seek(t); };
 

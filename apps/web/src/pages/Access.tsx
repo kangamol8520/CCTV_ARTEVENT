@@ -1,0 +1,378 @@
+/**
+ * Face entry/exit log (Phase 3): people recognized by the face worker (apps/face/worker.py) on the
+ * entrance/exit cameras. Each row = one person passing one camera. Snapshot vs. employee photo,
+ * manual correction, jump to the central recording, per-person daily summary, and (admin)
+ * per-camera settings incl. drawing the detection zone.
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { ArrowDownToLine, ArrowUpFromLine, Film, Pencil, RefreshCw, ScanFace, Settings2, X } from "lucide-react";
+import clsx from "clsx";
+import { api, API_URL, getToken } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { Button, Card, Field, Input, Modal, PageHeader, Select, StatusDot, toLocalInput } from "../components/ui";
+
+type Status = "MATCHED" | "UNCERTAIN" | "UNKNOWN";
+interface Cand { code: string; name: string; sim: number; photoUrl: string | null }
+interface AccessEvent {
+  id: number; cameraId: number; deviceNo: string; recorded: boolean; direction: "IN" | "OUT"; status: Status;
+  empCode: string | null; empName: string | null; similarity: number; margin: number; candidates: Cand[];
+  firstSeenAt: string; lastSeenAt: string; frames: number; faceSize: number;
+  snapshotUrl: string | null; photoUrl: string | null; reviewedAt: string | null;
+}
+interface FaceCam {
+  id: number; deviceNo: string; name: string; status: string; faceEnabled: boolean; faceDirection: "IN" | "OUT" | null; faceZone: string | null; recordEnabled: boolean;
+  job: { running: boolean; fps: number; processedFps: number; busyPct: number; tracks: number; events: number; lastError: string | null } | null;
+}
+interface FaceStatus {
+  worker: { alive: boolean; updatedAt: string; gallery: { employees: number; templates: number } | null } | null;
+  employees: number;
+  cameras: FaceCam[];
+}
+
+const STATUS_LABEL: Record<Status, string> = { MATCHED: "ตรงกัน", UNCERTAIN: "ไม่แน่ใจ", UNKNOWN: "ไม่รู้จัก" };
+const STATUS_CLS: Record<Status, string> = {
+  MATCHED: "bg-emerald-900/40 text-emerald-300 ring-emerald-700/50",
+  UNCERTAIN: "bg-amber-900/30 text-amber-300 ring-amber-700/50",
+  UNKNOWN: "bg-ink-800 text-zinc-400 ring-ink-700",
+};
+const fmtTime = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour12: false });
+const localDay = (d: Date) => toLocalInput(d).slice(0, 10);
+
+const Img = ({ src, className, alt }: { src: string | null; className?: string; alt: string }) =>
+  src ? <img src={API_URL + src} alt={alt} loading="lazy" className={clsx("bg-ink-950 object-cover", className)} />
+    : <div className={clsx("grid place-items-center bg-ink-950 text-[10px] text-zinc-600", className)}>ไม่มีรูป</div>;
+
+const DirBadge = ({ d }: { d: "IN" | "OUT" }) => d === "IN"
+  ? <span className="inline-flex items-center gap-1 text-sky-300"><ArrowDownToLine size={12} /> เข้า</span>
+  : <span className="inline-flex items-center gap-1 text-orange-300"><ArrowUpFromLine size={12} /> ออก</span>;
+
+// ── per-camera settings + zone editor (admin) ──────────────────────────────────────────────
+function ZoneEditor({ cam, onClose }: { cam: FaceCam; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [img, setImg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [zone, setZone] = useState<number[]>(cam.faceZone ? cam.faceZone.split(",").map(Number) : [0, 0, 1, 1]);
+  const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const res = await fetch(`${API_URL}/api/face/cameras/${cam.id}/frame`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) throw new Error(`โหลดภาพไม่ได้ (${res.status})`);
+      const url = URL.createObjectURL(await res.blob());
+      setImg((old) => { if (old) URL.revokeObjectURL(old); return url; });
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pos = (e: React.MouseEvent) => {
+    const r = box.current!.getBoundingClientRect();
+    return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+  };
+  const save = useMutation({
+    mutationFn: () => api(`/api/face/cameras/${cam.id}`, { method: "PATCH", json: { faceZone: zone.map((v) => v.toFixed(4)).join(",") } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["face", "status"] }); onClose(); },
+    onError: (e) => setErr((e as Error).message),
+  });
+  const [x0, y0, x1, y1] = zone as [number, number, number, number];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={onClose}>
+      <div className="w-full max-w-6xl rounded-2xl border border-ink-700 bg-ink-900 p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center gap-3">
+          <div className="font-display text-base font-semibold text-cream">โซนตรวจจับใบหน้า — {cam.deviceNo}</div>
+          <div className="text-xs text-zinc-500">ลากเมาส์บนภาพเพื่อกำหนดกรอบ: ช่วงที่คนเพิ่งผ่านประตูและเดินเข้าหากล้อง (หลีกเลี่ยงกระจกประตู)</div>
+          <button className="ml-auto text-zinc-400 hover:text-cream" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div
+          ref={box}
+          className="relative w-full cursor-crosshair select-none overflow-hidden rounded bg-black"
+          style={{ aspectRatio: "16 / 9" }}
+          onMouseDown={(e) => { const p = pos(e); setDrag(p); setZone([p.x, p.y, p.x, p.y]); }}
+          onMouseMove={(e) => { if (!drag) return; const p = pos(e); setZone([Math.min(drag.x, p.x), Math.min(drag.y, p.y), Math.max(drag.x, p.x), Math.max(drag.y, p.y)]); }}
+          onMouseUp={() => setDrag(null)}
+          onMouseLeave={() => setDrag(null)}
+        >
+          {img ? <img src={img} className="pointer-events-none absolute inset-0 h-full w-full object-fill" alt="" /> : <div className="grid h-full place-items-center text-sm text-zinc-500">{err ?? "กำลังโหลดภาพ…"}</div>}
+          <div className="pointer-events-none absolute border-2 border-gold-400 bg-gold-400/10 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"
+            style={{ left: `${x0 * 100}%`, top: `${y0 * 100}%`, width: `${(x1 - x0) * 100}%`, height: `${(y1 - y0) * 100}%` }} />
+        </div>
+        <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+          <span className="font-mono">{zone.map((v) => v.toFixed(3)).join(", ")}</span>
+          {err && <span className="text-red-400">{err}</span>}
+          <Button variant="ghost" className="ml-auto" onClick={load}><RefreshCw size={13} /> ภาพใหม่</Button>
+          <Button variant="ghost" onClick={() => setZone([0, 0, 1, 1])}>ทั้งภาพ</Button>
+          <Button variant="gold" disabled={x1 - x0 < 0.05 || y1 - y0 < 0.05 || save.isPending} onClick={() => save.mutate()}>บันทึกโซน</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({ status, isAdmin }: { status: FaceStatus | undefined; isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const [zoneCam, setZoneCam] = useState<FaceCam | null>(null);
+  const [addId, setAddId] = useState("");
+  const allCams = useQuery({ queryKey: ["cameras", "all"], queryFn: () => api<{ id: number; deviceNo: string; name: string; isEnabled: boolean }[]>("/api/cameras"), enabled: isAdmin });
+  const patch = useMutation({
+    mutationFn: (v: { id: number; faceEnabled?: boolean; faceDirection?: "IN" | "OUT" }) => api(`/api/face/cameras/${v.id}`, { method: "PATCH", json: { faceEnabled: v.faceEnabled, faceDirection: v.faceDirection } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["face", "status"] }),
+  });
+  const w = status?.worker;
+  return (
+    <Card className="mx-5 mb-3 p-3 text-xs">
+      <div className="mb-2 flex flex-wrap items-center gap-x-5 gap-y-1">
+        <span className="flex items-center gap-1.5">
+          <span className={clsx("h-2 w-2 rounded-full", w?.alive ? "bg-emerald-400" : "bg-red-500")} />
+          ตัวจดจำใบหน้า {w?.alive ? "ทำงาน" : "ไม่ทำงาน"}
+        </span>
+        <span className="text-zinc-400">ฐานข้อมูลใบหน้า {w?.gallery?.employees.toLocaleString() ?? "-"} / พนักงาน {status?.employees.toLocaleString() ?? "-"} คน</span>
+        <span className="text-zinc-500">รูปจากกล้องเก็บ 30 วัน · ข้อมูลใบหน้าอยู่บนเซิร์ฟเวอร์เท่านั้น</span>
+      </div>
+      <table className="w-full">
+        <thead className="text-left text-zinc-500">
+          <tr><th className="py-1 font-normal">กล้อง</th><th className="font-normal">ทิศทาง</th><th className="font-normal">สถานะ</th><th className="font-normal">ภาพ/วินาที</th><th className="font-normal">CPU</th><th className="font-normal">รายการ (ตั้งแต่เริ่ม)</th><th /></tr>
+        </thead>
+        <tbody>
+          {status?.cameras.map((c) => (
+            <tr key={c.id} className="border-t border-ink-800/60">
+              <td className="py-1"><StatusDot status={c.status} /> <span className="text-cream">{c.deviceNo}</span> <span className="text-zinc-500">{c.name}</span></td>
+              <td>
+                {isAdmin ? (
+                  <Select className="!w-24 !py-0.5 text-xs" value={c.faceDirection ?? "IN"} onChange={(e) => patch.mutate({ id: c.id, faceDirection: e.target.value as "IN" | "OUT" })}>
+                    <option value="IN">เข้า</option><option value="OUT">ออก</option>
+                  </Select>
+                ) : c.faceDirection && <DirBadge d={c.faceDirection} />}
+              </td>
+              <td>
+                {!c.faceEnabled ? <span className="text-zinc-500">ปิด</span>
+                  : c.job?.running ? <span className="text-emerald-400">● กำลังตรวจ</span>
+                  : <span className="text-amber-400" title={c.job?.lastError ?? ""}>รอเชื่อมต่อ</span>}
+                {c.job?.lastError && <div className="max-w-xs truncate text-[10px] text-red-400">{c.job.lastError}</div>}
+              </td>
+              <td>{c.job ? `${c.job.fps} / ตรวจ ${c.job.processedFps}` : "-"}</td>
+              <td>{c.job ? `${c.job.busyPct}%` : "-"}</td>
+              <td>{c.job?.events ?? "-"}</td>
+              <td className="space-x-1 text-right">
+                {isAdmin && <>
+                  <button className="rounded px-2 py-0.5 text-zinc-400 hover:bg-ink-800 hover:text-cream" onClick={() => setZoneCam(c)}><Settings2 size={11} className="inline" /> โซน</button>
+                  <button className="rounded px-2 py-0.5 text-zinc-400 hover:bg-ink-800 hover:text-cream" onClick={() => patch.mutate({ id: c.id, faceEnabled: !c.faceEnabled })}>{c.faceEnabled ? "ปิด" : "เปิด"}</button>
+                </>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {isAdmin && (
+        <div className="mt-2 flex items-center gap-2">
+          <Select className="w-80" value={addId} onChange={(e) => setAddId(e.target.value)}>
+            <option value="">+ เพิ่มกล้องตรวจใบหน้า…</option>
+            {allCams.data?.filter((c) => c.isEnabled && !status?.cameras.some((f) => f.id === c.id)).map((c) => <option key={c.id} value={c.id}>{c.deviceNo} {c.name}</option>)}
+          </Select>
+          <Button disabled={!addId || patch.isPending} onClick={() => { patch.mutate({ id: Number(addId), faceEnabled: false, faceDirection: "IN" }); setAddId(""); }}>เพิ่ม</Button>
+          <span className="text-zinc-500">เพิ่มแล้วให้วาดโซนก่อนเปิดใช้</span>
+        </div>
+      )}
+      {zoneCam && <ZoneEditor cam={zoneCam} onClose={() => setZoneCam(null)} />}
+    </Card>
+  );
+}
+
+// ── correction dialog ───────────────────────────────────────────────────────────────────────
+function CorrectDialog({ ev, onClose }: { ev: AccessEvent; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [q, setQ] = useState("");
+  const [dq, setDq] = useState("");
+  useEffect(() => { const t = setTimeout(() => setDq(q), 300); return () => clearTimeout(t); }, [q]);
+  const search = useQuery({
+    queryKey: ["face", "employees", dq],
+    queryFn: () => api<{ code: string; name: string; photoUrl: string | null }[]>(`/api/face/employees?q=${encodeURIComponent(dq)}`),
+    enabled: dq.trim().length >= 2,
+  });
+  const set = useMutation({
+    mutationFn: (empCode: string | null) => api(`/api/face/events/${ev.id}`, { method: "PATCH", json: { empCode } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["face", "events"] }); onClose(); },
+  });
+  const Choice = ({ code, name, photoUrl, sim }: { code: string; name: string; photoUrl: string | null; sim?: number }) => (
+    <button className={clsx("flex w-full items-center gap-3 rounded-lg p-1.5 text-left hover:bg-ink-800", ev.empCode === code && "ring-1 ring-gold-600")} onClick={() => set.mutate(code)}>
+      <Img src={photoUrl} alt={code} className="h-14 w-11 rounded" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-cream">{name}</div>
+        <div className="text-xs text-zinc-500">{code}{sim !== undefined && ` · คะแนน ${sim.toFixed(2)}`}</div>
+      </div>
+    </button>
+  );
+  return (
+    <Modal title="แก้ไขผู้ที่ผ่านกล้อง" onClose={onClose} wide>
+      <div className="flex gap-4">
+        <div className="shrink-0">
+          <Img src={ev.snapshotUrl} alt="" className="h-48 w-48 rounded-lg" />
+          <div className="mt-1 text-center text-xs text-zinc-500">{ev.deviceNo} · {fmtTime(ev.firstSeenAt)}</div>
+        </div>
+        <div className="min-w-0 flex-1 space-y-3">
+          <div>
+            <div className="mb-1 text-xs text-zinc-400">ระบบเสนอ</div>
+            {ev.candidates.map((c) => <Choice key={c.code} {...c} />)}
+          </div>
+          <Field label="ค้นหาพนักงาน (รหัส หรือ ชื่อ)"><Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="อย่างน้อย 2 ตัวอักษร" /></Field>
+          <div className="max-h-60 overflow-auto">{search.data?.map((e) => <Choice key={e.code} {...e} />)}</div>
+          <div className="flex justify-between border-t border-ink-800 pt-3">
+            <Button variant="ghost" onClick={() => set.mutate(null)}>ไม่ใช่พนักงาน / ไม่รู้จัก</Button>
+            <Button variant="ghost" onClick={onClose}>ยกเลิก</Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── page ────────────────────────────────────────────────────────────────────────────────────
+export function Access() {
+  const { user, can } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const navigate = useNavigate();
+  const [day, setDay] = useState(localDay(new Date()));
+  const [cameraId, setCameraId] = useState("");
+  const [direction, setDirection] = useState("");
+  const [statusF, setStatusF] = useState<Status[]>(["MATCHED", "UNCERTAIN"]);
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState<"list" | "people">("list");
+  const [editing, setEditing] = useState<AccessEvent | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const isToday = day === localDay(new Date());
+
+  const status = useQuery({ queryKey: ["face", "status"], queryFn: () => api<FaceStatus>("/api/face/status"), refetchInterval: 15000 });
+  const from = new Date(`${day}T00:00:00`);
+  const to = new Date(from.getTime() + 24 * 3600_000);
+  const events = useQuery({
+    queryKey: ["face", "events", day, cameraId, direction],
+    queryFn: () => api<AccessEvent[]>(`/api/face/events?from=${from.toISOString()}&to=${to.toISOString()}${cameraId ? `&cameraId=${cameraId}` : ""}${direction ? `&direction=${direction}` : ""}`),
+    refetchInterval: isToday ? 15000 : false,
+  });
+  const all = events.data ?? [];
+  const counts = useMemo(() => ({
+    MATCHED: all.filter((e) => e.status === "MATCHED").length,
+    UNCERTAIN: all.filter((e) => e.status === "UNCERTAIN").length,
+    UNKNOWN: all.filter((e) => e.status === "UNKNOWN").length,
+  }), [all]);
+  const ql = q.trim().toLowerCase();
+  const rows = all.filter((e) => statusF.includes(e.status) && (!ql || e.empCode?.toLowerCase().includes(ql) || e.empName?.toLowerCase().includes(ql)));
+
+  /** First IN / last OUT per employee for the day (confident or corrected matches only). */
+  const people = useMemo(() => {
+    const m = new Map<string, { code: string; name: string; photoUrl: string | null; firstIn: string | null; lastOut: string | null; ins: number; outs: number }>();
+    for (const e of all) {
+      if (e.status !== "MATCHED" || !e.empCode) continue;
+      const p = m.get(e.empCode) ?? { code: e.empCode, name: e.empName ?? "", photoUrl: e.photoUrl, firstIn: null, lastOut: null, ins: 0, outs: 0 };
+      if (e.direction === "IN") { p.ins++; if (!p.firstIn || e.firstSeenAt < p.firstIn) p.firstIn = e.firstSeenAt; }
+      else { p.outs++; if (!p.lastOut || e.lastSeenAt > p.lastOut) p.lastOut = e.lastSeenAt; }
+      m.set(e.empCode, p);
+    }
+    return [...m.values()].filter((p) => !ql || p.code.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql)).sort((a, b) => (a.firstIn ?? a.lastOut ?? "").localeCompare(b.firstIn ?? b.lastOut ?? ""));
+  }, [all, ql]);
+
+  const openVideo = (e: AccessEvent) => navigate(`/recordings?cam=${e.cameraId}&t=${new Date(e.firstSeenAt).getTime() - 3000}`);
+  const toggleStatus = (s: Status) => setStatusF((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
+
+  return (
+    <div className="flex h-full flex-col">
+      <PageHeader title="บันทึกเข้า-ออก (ทดสอบ)" subtitle="จดจำใบหน้าจากกล้องทางเข้า-ออก · ข้อมูลใบหน้าประมวลผลบนเซิร์ฟเวอร์ภายในเท่านั้น">
+        <Button variant="ghost" onClick={() => setShowSettings((v) => !v)}><Settings2 size={14} /> กล้องและสถานะ</Button>
+      </PageHeader>
+      {(showSettings || status.data?.worker?.alive === false) && <SettingsPanel status={status.data} isAdmin={isAdmin} />}
+
+      <div className="flex flex-wrap items-end gap-2 px-5 pb-3 pt-3">
+        <Field label="วันที่"><Input type="date" value={day} onChange={(e) => setDay(e.target.value)} /></Field>
+        <Field label="กล้อง">
+          <Select className="w-56" value={cameraId} onChange={(e) => setCameraId(e.target.value)}>
+            <option value="">ทุกกล้อง</option>
+            {status.data?.cameras.map((c) => <option key={c.id} value={c.id}>{c.deviceNo} ({c.faceDirection === "OUT" ? "ออก" : "เข้า"})</option>)}
+          </Select>
+        </Field>
+        <Field label="ทิศทาง">
+          <Select className="w-28" value={direction} onChange={(e) => setDirection(e.target.value)}>
+            <option value="">ทั้งหมด</option><option value="IN">เข้า</option><option value="OUT">ออก</option>
+          </Select>
+        </Field>
+        <Field label="ค้นหา"><Input className="w-56" value={q} onChange={(e) => setQ(e.target.value)} placeholder="รหัส หรือ ชื่อพนักงาน" /></Field>
+        <div className="ml-auto flex overflow-hidden rounded-lg ring-1 ring-ink-700">
+          <button onClick={() => setTab("list")} className={clsx("px-3 py-1.5 text-xs", tab === "list" ? "bg-gold-500 text-onaccent" : "text-zinc-400 hover:bg-ink-800")}>รายการ</button>
+          <button onClick={() => setTab("people")} className={clsx("px-3 py-1.5 text-xs", tab === "people" ? "bg-gold-500 text-onaccent" : "text-zinc-400 hover:bg-ink-800")}>สรุปรายคน</button>
+        </div>
+      </div>
+
+      {tab === "list" && (
+        <div className="flex items-center gap-2 px-5 pb-2 text-xs">
+          {(Object.keys(STATUS_LABEL) as Status[]).map((s) => (
+            <button key={s} onClick={() => toggleStatus(s)} className={clsx("rounded-full px-2.5 py-0.5 ring-1", statusF.includes(s) ? STATUS_CLS[s] : "text-zinc-600 ring-ink-800")}>
+              {STATUS_LABEL[s]} {counts[s]}
+            </button>
+          ))}
+          <span className="ml-2 text-zinc-500">แสดง {rows.length} รายการ{isToday && " · อัปเดตทุก 15 วินาที"}</span>
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
+        {events.isLoading ? <div className="p-6 text-sm text-zinc-500">กำลังโหลด…</div>
+          : tab === "list" ? (
+            rows.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 p-10 text-sm text-zinc-500"><ScanFace size={28} /> ไม่มีรายการในวันนี้</div>
+            ) : (
+              <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(330px,1fr))]">
+                {rows.map((e) => (
+                  <Card key={e.id} className="flex gap-2 p-2">
+                    <Img src={e.snapshotUrl} alt="กล้อง" className="h-28 w-24 shrink-0 rounded" />
+                    <Img src={e.photoUrl} alt="พนักงาน" className="h-28 w-[84px] shrink-0 rounded" />
+                    <div className="flex min-w-0 flex-1 flex-col text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-sm text-cream">{fmtTime(e.firstSeenAt)}</span>
+                        <DirBadge d={e.direction} />
+                      </div>
+                      <div className="truncate text-sm text-cream" title={e.empName ?? ""}>{e.empName ?? (e.status === "UNKNOWN" ? "ไม่ทราบชื่อ" : "-")}</div>
+                      <div className="text-zinc-500">{e.empCode ?? ""}</div>
+                      <div className="mt-auto flex items-center gap-1.5">
+                        <span className={clsx("rounded px-1.5 py-px ring-1", STATUS_CLS[e.status])}>{STATUS_LABEL[e.status]}{e.reviewedAt && " ✓"}</span>
+                        <span className="text-zinc-500" title={`ห่างอันดับ 2: ${e.margin.toFixed(2)} · ${e.frames} ภาพ · หน้า ${e.faceSize}px`}>{e.similarity.toFixed(2)}</span>
+                        <span className="text-zinc-600">{e.deviceNo}</span>
+                        <span className="ml-auto flex">
+                          {e.recorded && <button className="rounded p-1 text-zinc-400 hover:bg-ink-800 hover:text-cream" title="ดูวิดีโอ" onClick={() => openVideo(e)}><Film size={14} /></button>}
+                          {can("OPERATOR") && <button className="rounded p-1 text-zinc-400 hover:bg-ink-800 hover:text-cream" title="แก้ไขชื่อ" onClick={() => setEditing(e)}><Pencil size={14} /></button>}
+                        </span>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )
+          ) : (
+            <Card className="overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-850 text-left text-xs text-zinc-500">
+                  <tr><th className="px-3 py-2 font-normal" /><th className="font-normal">พนักงาน</th><th className="font-normal">เข้าครั้งแรก</th><th className="font-normal">ออกครั้งสุดท้าย</th><th className="font-normal">เข้า / ออก (ครั้ง)</th></tr>
+                </thead>
+                <tbody>
+                  {people.map((p) => (
+                    <tr key={p.code} className="border-t border-ink-800/60">
+                      <td className="w-14 px-3 py-1"><Img src={p.photoUrl} alt={p.code} className="h-12 w-9 rounded" /></td>
+                      <td><div className="text-cream">{p.name}</div><div className="text-xs text-zinc-500">{p.code}</div></td>
+                      <td className="font-mono">{p.firstIn ? fmtTime(p.firstIn) : <span className="text-zinc-600">-</span>}</td>
+                      <td className="font-mono">{p.lastOut ? fmtTime(p.lastOut) : <span className="text-zinc-600">-</span>}</td>
+                      <td className="text-zinc-400">{p.ins} / {p.outs}</td>
+                    </tr>
+                  ))}
+                  {people.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-zinc-500">ยังไม่มีพนักงานที่ระบบจดจำได้แน่ชัดในวันนี้</td></tr>}
+                </tbody>
+              </table>
+              <div className="border-t border-ink-800 px-3 py-2 text-xs text-zinc-500">นับเฉพาะรายการ "ตรงกัน" (รวมที่แก้ไขด้วยมือ) — รายการ "ไม่แน่ใจ" ให้ตรวจและแก้ไขในแท็บรายการก่อน</div>
+            </Card>
+          )}
+      </div>
+      {editing && <CorrectDialog ev={editing} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
