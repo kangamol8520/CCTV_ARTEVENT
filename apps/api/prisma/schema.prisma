@@ -145,8 +145,14 @@ model Camera {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  /// Central recording (Phase 2): when true the recorder process writes this camera to disk
+  recordEnabled  Boolean   @default(false)
+  /// Which go2rtc stream to record: MAIN | SUB
+  recordStream   String    @default("MAIN") @db.NVarChar(8)
+
   groupMembers   CameraGroupMember[]
   events         Event[]
+  recordings     Recording[]
 
   @@index([registryId])
 }
@@ -219,4 +225,25 @@ model AuditLog {
 model Setting {
   key   String @id @db.NVarChar(64)
   value String @db.NVarChar(Max)
+}
+
+/// One recorded file (default 60 s) written by the recorder (src/recorder.ts).
+/// filePath is relative to RECORDINGS_DIR. Times are UTC.
+model Recording {
+  id         Int      @id @default(autoincrement())
+  cameraId   Int
+  camera     Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  startedAt  DateTime
+  endedAt    DateTime
+  durationMs Int
+  filePath   String   @unique @db.NVarChar(400)
+  sizeBytes  BigInt
+  videoCodec String?  @db.NVarChar(16)
+  width      Int?
+  height     Int?
+  hasAudio   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([cameraId, startedAt])
+  @@index([startedAt])
 }

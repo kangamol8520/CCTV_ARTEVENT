@@ -1,0 +1,16 @@
+# CCTV web (Vite dev server, reachable on the LAN).
+[Unit]
+Description=CCTV web (Vite dev server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=adminae
+WorkingDirectory=/home/adminae/CCTV/apps/web
+Environment=PATH=/home/adminae/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/adminae/.bun/bin/bunx vite --host 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

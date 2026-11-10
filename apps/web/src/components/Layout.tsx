@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Camera, FolderKanban, HardDrive, History, LayoutDashboard, LayoutGrid, LogOut, Moon, Sun, Video } from "lucide-react";
+import { Activity, Camera, Film, FolderKanban, HardDrive, History, LayoutDashboard, LayoutGrid, LogOut, Moon, Sun, Video } from "lucide-react";
 import clsx from "clsx";
 import { useAuth } from "../lib/auth";
 import { getTheme, toggleTheme } from "../lib/theme";
@@ -10,6 +10,7 @@ const nav = [
   { to: "/live", label: "ดูสด", icon: Video },
   { to: "/layouts", label: "จัดเลย์เอาต์", icon: LayoutGrid },
   { to: "/playback", label: "ดูย้อนหลัง", icon: History },
+  { to: "/recordings", label: "บันทึกกลาง", icon: Film },
   { to: "/events", label: "เหตุการณ์", icon: Activity },
   { to: "/cameras", label: "กล้อง", icon: Camera },
   { to: "/groups", label: "กลุ่มกล้อง", icon: FolderKanban },

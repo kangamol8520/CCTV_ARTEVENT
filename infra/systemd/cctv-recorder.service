@@ -1,0 +1,19 @@
+# CCTV central recorder (apps/api/src/recorder.ts). Separate from the API so recording
+# survives API restarts. SIGINT lets ffmpeg finalize the current segment before exit.
+[Unit]
+Description=CCTV central recorder (ffmpeg segments from go2rtc)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=adminae
+WorkingDirectory=/home/adminae/CCTV
+Environment=PATH=/home/adminae/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/adminae/.bun/bin/bun run recorder
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

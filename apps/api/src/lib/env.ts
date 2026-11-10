@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var ${name}`);
@@ -18,6 +20,14 @@ export const env = {
   registryCaFile: process.env.REGISTRY_CA_FILE ?? "",
   registryJobType: process.env.REGISTRY_JOBTYPE ?? "01",
   registryCategory: process.env.REGISTRY_CATEGORY ?? "A003",
+  /** Central recording (Phase 2). Default: <repo>/data/recordings (git-ignored). */
+  recordingsDir: resolve(process.env.RECORDINGS_DIR ?? resolve(import.meta.dir, "../../../../data/recordings")),
+  recordingSegmentSeconds: Number(process.env.RECORDING_SEGMENT_SECONDS ?? 60),
+  recordingRetentionDays: Number(process.env.RECORDING_RETENTION_DAYS ?? 3),
+  /** Oldest files are deleted early when free space on the recordings disk drops below this. */
+  recordingMinFreeGb: Number(process.env.RECORDING_MIN_FREE_GB ?? 50),
+  /** RTSP base of go2rtc as seen by the recorder (records the restream, so cameras get no extra connection). */
+  go2rtcRtspUrl: (process.env.GO2RTC_RTSP_URL ?? "rtsp://127.0.0.1:8554").replace(/\/$/, ""),
 };
 
 if (env.appSecret.length < 32) {

@@ -1,0 +1,17 @@
+# CCTV API (dev mode: bun --watch reloads on code changes).
+# Install: see infra/systemd/README.md
+[Unit]
+Description=CCTV API (Bun + Elysia)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=adminae
+WorkingDirectory=/home/adminae/CCTV
+Environment=PATH=/home/adminae/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/adminae/.bun/bin/bun run dev:api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

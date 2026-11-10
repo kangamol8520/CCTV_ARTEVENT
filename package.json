@@ -5,6 +5,7 @@
   "scripts": {
     "dev:api": "bun run --cwd apps/api dev",
     "dev:web": "bun run --cwd apps/web dev",
+    "recorder": "bun run --cwd apps/api recorder",
     "db:generate": "bun run --cwd apps/api db:generate",
     "db:push": "bun run --cwd apps/api db:push",
     "import:registry": "bun run --cwd apps/api import:registry",
