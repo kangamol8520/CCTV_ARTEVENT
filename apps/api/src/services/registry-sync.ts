@@ -105,7 +105,7 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
       if (!enabled && cam.isEnabled) summary.disabled++;
 
       if (ipChanged && enabled && !hidden) toRediscover.push(cam.id);
-      else if (!enabled) await syncCamera(cam.id).catch(() => {}); // drop stream for disabled/hidden cams
+      else if (!enabled && cam.isEnabled) await syncCamera(cam.id).catch(() => {}); // drop stream once, when a cam becomes disabled/hidden
     } catch (e) {
       summary.errors.push(`${d.DeviceNo}: ${(e as Error).message}`);
     }

@@ -21,14 +21,23 @@ export async function listStreams(): Promise<Record<string, Go2rtcStreamInfo>> {
   return (await res.json()) as Record<string, Go2rtcStreamInfo>;
 }
 
+// go2rtc 1.9.x crashes ("fatal error: concurrent map writes") when stream PUT/DELETE requests
+// overlap, dropping every live view. All stream mutations go through this one-at-a-time queue.
+let mutations: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = mutations.then(fn, fn);
+  mutations = run.catch(() => {});
+  return run;
+}
+
 export async function putStream(name: string, src: string) {
   const q = new URLSearchParams({ name, src });
-  await api(`/streams?${q.toString()}`, { method: "PUT" });
+  await serialized(() => api(`/streams?${q.toString()}`, { method: "PUT" }));
 }
 
 export async function deleteStream(name: string) {
   const q = new URLSearchParams({ src: name });
-  await api(`/streams?${q.toString()}`, { method: "DELETE" });
+  await serialized(() => api(`/streams?${q.toString()}`, { method: "DELETE" }));
 }
 
 export async function isReachable(): Promise<boolean> {
@@ -47,7 +56,8 @@ export async function syncCamera(cameraId: number) {
   const main = streamName(cam.id);
   const sub = streamName(cam.id, true);
   if (!cam.isEnabled) {
-    await Promise.allSettled([deleteStream(main), deleteStream(sub)]);
+    await deleteStream(main).catch(() => {});
+    await deleteStream(sub).catch(() => {});
     return { ok: true, removed: true };
   }
   const src = await buildSources(cam);
