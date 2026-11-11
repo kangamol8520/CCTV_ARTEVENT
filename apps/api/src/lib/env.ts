@@ -20,6 +20,10 @@ export const env = {
   registryCaFile: process.env.REGISTRY_CA_FILE ?? "",
   registryJobType: process.env.REGISTRY_JOBTYPE ?? "01",
   registryCategory: process.env.REGISTRY_CATEGORY ?? "A003",
+  /** Repair tickets (insertrepairdoc): who reports them. Dev values: 1372 / 222 — set the real
+   *  reporter in production. Empty = filing tickets is refused. */
+  repairContactPerson: process.env.REPAIR_CONTACT_PERSON ?? "",
+  repairTel: process.env.REPAIR_TEL ?? "",
   /** Central recording (Phase 2). Default: <repo>/data/recordings (git-ignored). */
   recordingsDir: resolve(process.env.RECORDINGS_DIR ?? resolve(import.meta.dir, "../../../../data/recordings")),
   recordingSegmentSeconds: Number(process.env.RECORDING_SEGMENT_SECONDS ?? 60),

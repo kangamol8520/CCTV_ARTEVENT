@@ -3,7 +3,10 @@ import { prisma } from "../lib/prisma.ts";
 import { authGuard, requireRole } from "../lib/auth.ts";
 import { notFound, badRequest } from "../lib/errors.ts";
 import { audit } from "../lib/audit.ts";
-import { registryConfigured, getRegistryDetail, getRegistryRepairs, editRegistryDevice } from "../services/registry.ts";
+import { registryConfigured, getRegistryDetail, getRegistryRepairs, editRegistryDevice, insertRepairDoc, openRepairs } from "../services/registry.ts";
+import { employees } from "../services/face.ts";
+import { env } from "../lib/env.ts";
+import { HttpError } from "../lib/errors.ts";
 import { syncFromRegistry } from "../services/registry-sync.ts";
 import { applyDiscovery } from "../services/discovery.ts";
 import { syncCamera } from "../services/go2rtc.ts";
@@ -35,6 +38,57 @@ export const registryRoutes = new Elysia({ prefix: "/registry" })
     if (!cam?.registryId) throw badRequest("Camera is not linked to the registry");
     return getRegistryRepairs(cam.registryId);
   })
+  /** Defaults for the repair form (dev: the configured reporter/tel; production: empty → user types). */
+  .get("/repair-defaults", () => ({ contactPerson: env.repairContactPerson, tel: env.repairTel, maxBrokenDes: 190 }))
+  /** Employee lookup for the reporter code (active staff from Emp.json + active.json). */
+  .get("/employees/:code", async ({ params }) => {
+    const emp = (await employees()).get(params.code.trim());
+    return emp ? { code: emp.code, name: emp.name } : { code: params.code, name: null };
+  })
+  /** File a repair ticket (ใบแจ้งซ่อม) in webae for this camera. Floor/room come from the live
+   *  registry record; an open ticket blocks a duplicate unless `force` is set. */
+  .post(
+    "/cameras/:cameraId/repairs",
+    async ({ user, params, body }) => {
+      requireRole(user, "OPERATOR");
+      const cam = await prisma.camera.findUnique({ where: { id: Number(params.cameraId) } });
+      if (!cam?.registryId) throw badRequest("กล้องนี้ยังไม่ผูกกับทะเบียน");
+      const contactPerson = body.contactPerson.trim();
+      const brokenDes = body.brokenDes.trim();
+      if (!brokenDes) throw badRequest("กรุณาระบุอาการเสีย");
+      if (brokenDes.length > 190) throw badRequest("อาการเสียยาวเกิน 190 ตัวอักษร");
+      const dir = await employees();
+      if (dir.size && !dir.has(contactPerson)) throw badRequest(`ไม่พบรหัสพนักงาน ${contactPerson} (หรือพ้นสภาพแล้ว)`);
+      const open = await openRepairs(cam.registryId);
+      if (open.length && !body.force) {
+        throw new HttpError(409, `มีใบแจ้งซ่อมที่ยังไม่เสร็จอยู่แล้ว: ${open.map((r) => `${r.BillDoc} (${r.StatusName ?? r.Status})`).join(", ")}`);
+      }
+      const dd = ((await getRegistryDetail(cam.registryId)).dataDevice ?? {}) as Record<string, unknown>;
+      const floorCode = str(dd.FloorCode);
+      const roomCode = str(dd.RoomCode);
+      if (!floorCode || !roomCode) throw badRequest("ทะเบียนไม่มีรหัสชั้น/ห้องของกล้องนี้");
+      const date = body.dueDate ? new Date(body.dueDate) : new Date();
+      const res = (await insertRepairDoc({
+        deviceNo: str(dd.DeviceNo) || cam.deviceNo, floorCode, roomCode, brokenDes, date,
+        contactPerson, tel: body.tel.trim(),
+      })) as { result?: { BillID: number }[] };
+      const billId = res.result?.[0]?.BillID ?? null;
+      // The insert answer has only BillID; read the ticket back for its document number.
+      const rows = (await getRegistryRepairs(cam.registryId).catch(() => [])) as { BillID?: number; BillDoc?: string }[];
+      const billDoc = (Array.isArray(rows) ? rows : []).find((r) => r.BillID === billId)?.BillDoc ?? null;
+      await audit(user.id, "REPAIR_REQUEST", "Registry", cam.registryId, { deviceNo: cam.deviceNo, billId, billDoc, contactPerson, brokenDes });
+      return { ok: true, billId, billDoc };
+    },
+    {
+      body: t.Object({
+        contactPerson: t.String({ minLength: 1, maxLength: 20 }),
+        tel: t.String({ maxLength: 30 }),
+        brokenDes: t.String({ minLength: 1, maxLength: 300 }),
+        dueDate: t.Optional(t.String()),
+        force: t.Optional(t.Boolean()),
+      }),
+    },
+  )
   /** Edit the registry device (write-back). Never deletes. Sends the full record (current
    *  values merged with the patch) because the backend UPDATEs every column. */
   .put(

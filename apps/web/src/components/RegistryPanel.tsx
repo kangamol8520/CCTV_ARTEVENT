@@ -5,9 +5,10 @@ import { api } from "../lib/api";
 import { Button, Field, Input, Modal, Select } from "./ui";
 import clsx from "clsx";
 import { useAuth } from "../lib/auth";
+import { RepairForm } from "./RepairForm";
 
 interface RegistryResp { linked: boolean; registryId?: number; detail?: { dataDevice?: Record<string, unknown>; UserLogin?: { UserLogin?: string; LoginType?: string }[] } }
-interface Repair { BillDoc?: string; JobDate?: string; FinishDate?: string; StatusName?: string; BrokenDes?: string; RepairDes?: string; EmpFullName?: string; RepairPrice?: number; PartPrice?: number }
+interface Repair { Status?: string; BillDoc?: string; JobDate?: string; FinishDate?: string; StatusName?: string; BrokenDes?: string; RepairDes?: string; EmpFullName?: string; RepairPrice?: number; PartPrice?: number }
 const s = (v: unknown) => (v === null || v === undefined || v === "" ? "-" : String(v));
 const d = (v: unknown) => { const x = v ? new Date(String(v)) : null; return x && !isNaN(x.getTime()) && x.getFullYear() > 2000 ? x.toLocaleDateString("th-TH") : "-"; };
 const dt = (v: unknown) => { const x = v ? new Date(String(v)) : null; return x && !isNaN(x.getTime()) && x.getFullYear() > 2000 ? x.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" }) : "-"; };
@@ -19,6 +20,8 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
   const reg = useQuery({ queryKey: ["registry", cameraId], queryFn: () => api<RegistryResp>(`/api/registry/cameras/${cameraId}`) });
   const [edit, setEdit] = useState<{ IPv4_1: string; Desciption: string; Status1: string } | null>(null);
   const [repairPage, setRepairPage] = useState(0);
+  const [repairing, setRepairing] = useState(false);
+  const [filed, setFiled] = useState<string | null>(null);
   const REPAIRS_PER_PAGE = 4;
 
   const repairsQuery = useQuery({
@@ -48,7 +51,17 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
     <Modal title={`ทะเบียนอุปกรณ์ · ${deviceNo}`} onClose={onClose} wide>
       {reg.isLoading && <div className="text-sm text-zinc-500">กำลังโหลด…</div>}
       {reg.data && !reg.data.linked && <div className="text-sm text-amber-400">กล้องนี้ยังไม่ผูกกับทะเบียน (ยังไม่มี registryId) ลองกดซิงก์ทะเบียน</div>}
-      {reg.data?.linked && !edit && (
+      {reg.data?.linked && repairing && (
+        <RepairForm
+          cameraId={cameraId}
+          deviceNo={s(dd.DeviceNo) === "-" ? deviceNo : String(dd.DeviceNo)}
+          floorRoom={`${s(dd.FloorCode)} / ${s(dd.RoomCode)}`}
+          repairs={repairs}
+          onCancel={() => setRepairing(false)}
+          onDone={(doc) => { setRepairing(false); setFiled(doc ?? "สร้างแล้ว"); setRepairPage(0); }}
+        />
+      )}
+      {reg.data?.linked && !edit && !repairing && (
         <div>
           <div className="grid gap-x-8 md:grid-cols-2">
             <Row label="รหัสอุปกรณ์" value={s(dd.DeviceNo)} />
@@ -65,10 +78,12 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
           <div className="mt-2"><div className="text-xs text-zinc-500">รายละเอียด / OSD</div><div className="text-sm text-zinc-200">{s(dd.Desciption)}</div></div>
 
           {can("OPERATOR") && (
-            <div className="mt-4">
+            <div className="mt-4 flex gap-2">
               <Button variant="gold" onClick={() => setEdit({ IPv4_1: s(dd.IPv4_1) === "-" ? "" : String(dd.IPv4_1), Desciption: s(dd.Desciption) === "-" ? "" : String(dd.Desciption), Status1: String(dd.Status1 ?? "0") })}>แก้ไขทะเบียน</Button>
+              <Button onClick={() => { setFiled(null); setRepairing(true); }}><Wrench size={14} /> แจ้งซ่อม</Button>
             </div>
           )}
+          {filed && <div className="mt-2 rounded-lg border border-emerald-700/50 bg-emerald-900/20 p-2 text-xs text-emerald-300">ส่งใบแจ้งซ่อมแล้ว: <span className="font-mono">{filed}</span></div>}
 
           <div className="mt-4 border-t border-ink-800 pt-3">
             <div className="mb-2 flex items-center justify-between">
