@@ -62,7 +62,7 @@ if (import.meta.main) {
     console.warn(`[go2rtc] not reachable at ${env.go2rtcUrl}; live streams will not be registered until it is up (POST /api/system/sync-streams)`);
   }
   startHealthScheduler();
-  startRegistrySyncScheduler();
+  startRegistrySyncScheduler().catch((e) => console.error("[registry-sync] scheduler", e));
 }
 
 export type App = typeof app;

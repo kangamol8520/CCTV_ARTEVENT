@@ -11,6 +11,9 @@ interface RegistryResp { linked: boolean; registryId?: number; detail?: { dataDe
 interface Repair { Status?: string; BillDoc?: string; JobDate?: string; FinishDate?: string; StatusName?: string; BrokenDes?: string; RepairDes?: string; EmpFullName?: string; RepairPrice?: number; PartPrice?: number }
 const s = (v: unknown) => (v === null || v === undefined || v === "" ? "-" : String(v));
 const d = (v: unknown) => { const x = v ? new Date(String(v)) : null; return x && !isNaN(x.getTime()) && x.getFullYear() > 2000 ? x.toLocaleDateString("th-TH") : "-"; };
+const PROTOCOLS: [string, string][] = [["HIKVISION", "HIKVISION · Hikvision ต่อ IP ตรง"], ["ONVIF", "ONVIF · ยี่ห้ออื่น"], ["RTSP", "RTSP · ระบุ path เอง"], ["NVR_CHANNEL", "NVR_CHANNEL · Plug&Play ผ่าน NVR"]];
+type EditForm = { IPv4_1: string; IPv4_2: string; Desciption: string; Status1: string; PROTOCOL: string; Network_PORT: string; Physical_PORT: string };
+const v = (x: unknown) => (x === null || x === undefined ? "" : String(x));
 const dt = (v: unknown) => { const x = v ? new Date(String(v)) : null; return x && !isNaN(x.getTime()) && x.getFullYear() > 2000 ? x.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" }) : "-"; };
 
 /** View + edit the device-registry record for a camera (write-back to webae). */
@@ -18,7 +21,7 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
   const qc = useQueryClient();
   const { can } = useAuth();
   const reg = useQuery({ queryKey: ["registry", cameraId], queryFn: () => api<RegistryResp>(`/api/registry/cameras/${cameraId}`) });
-  const [edit, setEdit] = useState<{ IPv4_1: string; Desciption: string; Status1: string } | null>(null);
+  const [edit, setEdit] = useState<EditForm | null>(null);
   const [repairPage, setRepairPage] = useState(0);
   const [repairing, setRepairing] = useState(false);
   const [filed, setFiled] = useState<string | null>(null);
@@ -74,12 +77,15 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
             <Row label="หมดประกัน" value={d(dd.OutWarranty)} />
             <Row label="ผู้ถือครอง" value={s(dd.Owner)} />
             <Row label="บัญชีเข้าระบบ" value={`${reg.data.detail?.UserLogin?.length ?? 0} บัญชี`} />
+            <Row label="โปรโตคอล" value={s(dd.PROTOCOL)} />
+            <Row label="พอร์ต RTSP" value={s(dd.Network_PORT)} />
+            <Row label="พอร์ต PoE ที่ NVR (Plug&Play)" value={s(dd.Physical_PORT)} />
           </div>
           <div className="mt-2"><div className="text-xs text-zinc-500">รายละเอียด / OSD</div><div className="text-sm text-zinc-200">{s(dd.Desciption)}</div></div>
 
           {can("OPERATOR") && (
             <div className="mt-4 flex gap-2">
-              <Button variant="gold" onClick={() => setEdit({ IPv4_1: s(dd.IPv4_1) === "-" ? "" : String(dd.IPv4_1), Desciption: s(dd.Desciption) === "-" ? "" : String(dd.Desciption), Status1: String(dd.Status1 ?? "0") })}>แก้ไขทะเบียน</Button>
+              <Button variant="gold" onClick={() => setEdit({ IPv4_1: v(dd.IPv4_1), IPv4_2: v(dd.IPv4_2), Desciption: v(dd.Desciption), Status1: String(dd.Status1 ?? "0"), PROTOCOL: v(dd.PROTOCOL), Network_PORT: v(dd.Network_PORT), Physical_PORT: v(dd.Physical_PORT) })}>แก้ไขทะเบียน</Button>
               <Button onClick={() => { setFiled(null); setRepairing(true); }}><Wrench size={14} /> แจ้งซ่อม</Button>
             </div>
           )}
@@ -132,9 +138,30 @@ export function RegistryPanel({ cameraId, deviceNo, onClose }: { cameraId: numbe
         <div className="space-y-3">
           <p className="text-xs text-amber-400/80">แก้ไขนี้จะเขียนกลับไปที่ทะเบียนอุปกรณ์ (webae) โดยตรง</p>
           <Field label="IP หลัก"><Input value={edit.IPv4_1} onChange={(e) => setEdit({ ...edit, IPv4_1: e.target.value })} /></Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="โปรโตคอล">
+              <Select value={edit.PROTOCOL} onChange={(e) => setEdit({ ...edit, PROTOCOL: e.target.value })}>
+                <option value="">- ไม่ระบุ -</option>
+                {PROTOCOLS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </Select>
+            </Field>
+            {edit.PROTOCOL === "NVR_CHANNEL" ? (
+              <Field label="พอร์ต PoE ที่ NVR (ช่อง)"><Input inputMode="numeric" value={edit.Physical_PORT} onChange={(e) => setEdit({ ...edit, Physical_PORT: e.target.value.replace(/\D/g, "") })} placeholder="1-16" /></Field>
+            ) : (
+              <Field label="พอร์ต RTSP"><Input inputMode="numeric" value={edit.Network_PORT} onChange={(e) => setEdit({ ...edit, Network_PORT: e.target.value.replace(/\D/g, "") })} placeholder="554" /></Field>
+            )}
+          </div>
+          {edit.PROTOCOL === "NVR_CHANNEL" && (
+            <Field label="IP ของ NVR (IP รอง)"><Input value={edit.IPv4_2} onChange={(e) => setEdit({ ...edit, IPv4_2: e.target.value })} placeholder="192.168.x.x" /></Field>
+          )}
           <Field label="รายละเอียด / OSD"><Input value={edit.Desciption} onChange={(e) => setEdit({ ...edit, Desciption: e.target.value })} /></Field>
           <Field label="สถานะ"><Select value={edit.Status1} onChange={(e) => setEdit({ ...edit, Status1: e.target.value })}><option value="0">ใช้งาน</option><option value="1">เลิกใช้งาน</option></Select></Field>
-          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEdit(null)}>ยกเลิก</Button><Button variant="gold" disabled={save.isPending} onClick={() => save.mutate(edit)}>บันทึกกลับทะเบียน</Button></div>
+          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEdit(null)}>ยกเลิก</Button><Button variant="gold" disabled={save.isPending} onClick={() => {
+            // Plug&play streams through the NVR (its RTSP port lives on the NVR row); direct cams have no PoE port.
+            const plug = edit.PROTOCOL === "NVR_CHANNEL";
+            if (plug && !edit.Physical_PORT) return alert("กล้อง Plug&Play ต้องระบุพอร์ต PoE ที่ NVR");
+            save.mutate({ ...edit, Physical_PORT: plug ? edit.Physical_PORT : "", Network_PORT: plug ? "" : edit.Network_PORT });
+          }}>บันทึกกลับทะเบียน</Button></div>
         </div>
       )}
       <div className="mt-4 text-right text-[11px] text-zinc-600"><ExternalLink size={10} className="mr-1 inline" />ข้อมูลสดจากระบบทะเบียนอุปกรณ์ webae · ซิงก์อัตโนมัติทุก 5 นาที</div>

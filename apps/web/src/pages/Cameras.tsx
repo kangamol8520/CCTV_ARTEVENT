@@ -6,6 +6,7 @@ import type { Camera, FloorNode, Nvr } from "../types";
 import { Button, Field, Input, Modal, PageHeader, Select, StatusDot, Textarea, fmtDate } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { RegistryPanel } from "../components/RegistryPanel";
+import { RegistrySyncControl } from "../components/RegistrySyncControl";
 
 type Form = Partial<Camera> & { password?: string };
 const PROTOCOLS = ["HIKVISION", "ONVIF", "RTSP", "NVR_CHANNEL"];
@@ -46,6 +47,7 @@ export function Cameras() {
   return (
     <div>
       <PageHeader title="ทะเบียนกล้อง">
+        <RegistrySyncControl />
         <Button variant="ghost" onClick={() => healthAll.mutate()} disabled={healthAll.isPending}><RefreshCw size={14} /> ตรวจสถานะทั้งหมด</Button>
         {can("OPERATOR") && <Button variant="ghost" onClick={() => syncAll.mutate()} disabled={syncAll.isPending}>Sync go2rtc</Button>}
         <Button variant="ghost" onClick={() => download("/api/reports/cameras.xlsx", "camera-inventory.xlsx")}><Download size={14} /> Export</Button>

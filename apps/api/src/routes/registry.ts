@@ -3,25 +3,36 @@ import { prisma } from "../lib/prisma.ts";
 import { authGuard, requireRole } from "../lib/auth.ts";
 import { notFound, badRequest } from "../lib/errors.ts";
 import { audit } from "../lib/audit.ts";
-import { registryConfigured, getRegistryDetail, getRegistryRepairs, editRegistryDevice, insertRepairDoc, openRepairs } from "../services/registry.ts";
+import { registryConfigured, getRegistryDetail, getRegistryRepairs, patchRegistryDevice, insertRepairDoc, openRepairs } from "../services/registry.ts";
 import { employees } from "../services/face.ts";
 import { env } from "../lib/env.ts";
 import { HttpError } from "../lib/errors.ts";
-import { syncFromRegistry } from "../services/registry-sync.ts";
+import { runRegistrySync, cameraPortsFromRegistry, pushCameraPorts, registrySyncStatus, setRegistrySyncInterval } from "../services/registry-sync.ts";
 import { applyDiscovery } from "../services/discovery.ts";
 import { syncCamera } from "../services/go2rtc.ts";
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
-const dateStr = (v: unknown) => { const d = v ? new Date(String(v)) : null; return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : ""; };
 
 export const registryRoutes = new Elysia({ prefix: "/registry" })
   .use(authGuard)
   .get("/status", () => ({ configured: registryConfigured() }))
+  /** Auto-sync schedule: interval, last/next run. */
+  .get("/sync-settings", () => registrySyncStatus())
+  .put(
+    "/sync-settings",
+    async ({ user, body }) => {
+      requireRole(user, "ADMIN");
+      const r = await setRegistrySyncInterval(body.intervalSec).catch((e) => { throw badRequest((e as Error).message); });
+      await audit(user.id, "UPDATE", "Setting", undefined, { registrySyncIntervalSec: body.intervalSec });
+      return r;
+    },
+    { body: t.Object({ intervalSec: t.Integer({ minimum: 0, maximum: 86400 }) }) },
+  )
   .post(
     "/sync",
     async ({ user, query }) => {
       requireRole(user, "OPERATOR");
-      return syncFromRegistry({ rediscover: query.rediscover !== "false", userId: user.id });
+      return runRegistrySync({ rediscover: query.rediscover !== "false", userId: user.id });
     },
     { query: t.Object({ rediscover: t.Optional(t.String()) }) },
   )
@@ -89,40 +100,45 @@ export const registryRoutes = new Elysia({ prefix: "/registry" })
       }),
     },
   )
-  /** Edit the registry device (write-back). Never deletes. Sends the full record (current
-   *  values merged with the patch) because the backend UPDATEs every column. */
+  /** Edit the registry device (write-back). Never deletes. The backend UPDATEs every legacy column,
+   *  so patchRegistryDevice sends the full record (current values merged with the patch).
+   *  PROTOCOL / Network_PORT / Physical_PORT are also applied to the camera here and now, so the
+   *  stream reconnects immediately instead of waiting for the next registry sync. */
   .put(
     "/cameras/:cameraId",
     async ({ user, params, body }) => {
       requireRole(user, "OPERATOR");
       const cam = await prisma.camera.findUnique({ where: { id: Number(params.cameraId) } });
       if (!cam?.registryId) throw badRequest("Camera is not linked to the registry");
-      const detail = await getRegistryDetail(cam.registryId);
-      const cur = (detail.dataDevice ?? {}) as Record<string, unknown>;
-      const record = {
-        JobTypeCode: str(cur.JobTypeCode) || "01",
-        CategoryCode: str(cur.CategoryCode) || "A003",
-        DeviceNo: str(cur.DeviceNo) || cam.deviceNo,
-        FloorCode: body.FloorCode ?? str(cur.FloorCode),
-        RoomCode: body.RoomCode ?? str(cur.RoomCode),
-        PurchaseDate: dateStr(cur.PurchaseDate),
-        OutWarranty: dateStr(cur.OutWarranty),
-        Owner: str(cur.Owner),
-        Desciption: body.Desciption ?? str(cur.Desciption),
-        Status1: body.Status1 ?? (str(cur.Status1) || "0"),
-        IPv4_1: body.IPv4_1 ?? str(cur.IPv4_1),
-        IPv4_2: body.IPv4_2 ?? str(cur.IPv4_2),
-      };
-      await editRegistryDevice(cam.registryId, record);
+      const patch: Record<string, string> = {};
+      for (const [k, v] of Object.entries(body)) if (v !== undefined) patch[k] = k === "PROTOCOL" ? v.trim().toUpperCase() : v.trim();
+      const local = cameraPortsFromRegistry(patch);
+      if (patch.PROTOCOL && !local.protocol) throw badRequest("PROTOCOL ต้องเป็น HIKVISION, ONVIF, RTSP หรือ NVR_CHANNEL");
+      if (patch.Network_PORT && !local.rtspPort) throw badRequest("Network_PORT ต้องเป็นเลขพอร์ต 1-65535");
+      if (patch.Physical_PORT && !local.nvrChannel) throw badRequest("Physical_PORT ต้องเป็นเลขช่อง 1-256");
+      if ((local.protocol ?? cam.protocol) === "NVR_CHANNEL" && !(local.nvrChannel ?? cam.nvrChannel) && patch.Physical_PORT !== undefined) {
+        throw badRequest("กล้อง Plug&Play ต้องระบุ Physical_PORT");
+      }
+      const record = await patchRegistryDevice(cam.registryId, patch, cam.deviceNo);
       await audit(user.id, "EDIT", "Registry", cam.registryId, { deviceNo: cam.deviceNo, patch: body });
 
       // Reflect the change locally and re-discover if the IP changed.
       const newHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(record.IPv4_1.split(":")[0] ?? "") ? record.IPv4_1.split(":")[0]! : null;
-      const data: Record<string, unknown> = { description: record.Desciption };
+      const data: Record<string, unknown> = { description: record.Desciption, ...local };
+      if (local.protocol === "NVR_CHANNEL" || (!local.protocol && cam.protocol === "NVR_CHANNEL")) {
+        const nvrIp = record.IPv4_2.split(":")[0]?.trim();
+        const nvr = nvrIp ? await prisma.nvr.findFirst({ where: { host: nvrIp } }) : null;
+        if (nvr) data.nvrId = nvr.id;
+      }
       const ipChanged = newHost && newHost !== cam.host;
       if (newHost) data.host = newHost;
       await prisma.camera.update({ where: { id: cam.id }, data });
-      if (ipChanged) { await applyDiscovery(cam.id).catch(() => {}); } else { await syncCamera(cam.id).catch(() => {}); }
+      if (ipChanged) {
+        const r = await applyDiscovery(cam.id).catch(() => ({ ok: false }));
+        if (r.ok) await pushCameraPorts(cam.id);
+      } else {
+        await syncCamera(cam.id).catch(() => {});
+      }
       return { ok: true, ipChanged: !!ipChanged };
     },
     {
@@ -133,6 +149,9 @@ export const registryRoutes = new Elysia({ prefix: "/registry" })
         FloorCode: t.Optional(t.String()),
         RoomCode: t.Optional(t.String()),
         Status1: t.Optional(t.String()),
+        PROTOCOL: t.Optional(t.String({ maxLength: 20 })),
+        Network_PORT: t.Optional(t.String({ maxLength: 10 })),
+        Physical_PORT: t.Optional(t.String({ maxLength: 10 })),
       }),
     },
   );

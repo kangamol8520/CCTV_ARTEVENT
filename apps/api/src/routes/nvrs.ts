@@ -5,6 +5,8 @@ import { encryptSecret } from "../lib/crypto.ts";
 import { audit } from "../lib/audit.ts";
 import { notFound } from "../lib/errors.ts";
 import { tcpProbe } from "../services/health.ts";
+import { syncCamera } from "../services/go2rtc.ts";
+import { pushNvrPort } from "../services/registry-sync.ts";
 
 const nvrSelect = {
   id: true, name: true, legacyDeviceNo: true, brand: true, model: true, serialNo: true, host: true, httpPort: true, rtspPort: true,
@@ -58,9 +60,18 @@ export const nvrRoutes = new Elysia({ prefix: "/nvrs" })
       const { password, ...rest } = body;
       const data: Record<string, unknown> = { ...rest };
       if (password) data.passwordEnc = await encryptSecret(password);
+      const before = await prisma.nvr.findUnique({ where: { id: Number(params.id) }, select: { host: true, rtspPort: true } });
       const updated = await prisma.nvr.update({ where: { id: Number(params.id) }, data, select: nvrSelect });
       await audit(user.id, "UPDATE", "Nvr", updated.id, { ...rest });
-      return updated;
+      let registrySaved: boolean | null = null;
+      if (before && (before.host !== updated.host || before.rtspPort !== updated.rtspPort || password)) {
+        // Plug&play cameras stream through this NVR: re-register them with the new address/port.
+        for (const c of await prisma.camera.findMany({ where: { nvrId: updated.id, isEnabled: true, protocol: "NVR_CHANNEL" }, select: { id: true } })) {
+          await syncCamera(c.id).catch(() => {});
+        }
+        if (before.rtspPort !== updated.rtspPort) registrySaved = await pushNvrPort(updated.id);
+      }
+      return { ...updated, registrySaved };
     },
     { body: t.Partial(nvrBody) },
   )

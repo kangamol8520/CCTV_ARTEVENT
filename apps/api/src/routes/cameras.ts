@@ -7,6 +7,7 @@ import { notFound } from "../lib/errors.ts";
 import { env } from "../lib/env.ts";
 import { streamName } from "../services/streams.ts";
 import { syncCamera } from "../services/go2rtc.ts";
+import { pushCameraPorts } from "../services/registry-sync.ts";
 import { tcpProbe } from "../services/health.ts";
 
 const cameraSelect = {
@@ -88,10 +89,14 @@ export const cameraRoutes = new Elysia({ prefix: "/cameras" })
       const { password, ...rest } = body;
       const data: Record<string, unknown> = { ...rest };
       if (password) data.passwordEnc = await encryptSecret(password);
+      const before = await prisma.camera.findUnique({ where: { id: Number(params.id) }, select: { protocol: true, rtspPort: true, nvrChannel: true } });
       const updated = await prisma.camera.update({ where: { id: Number(params.id) }, data, select: cameraSelect });
       await audit(user.id, "UPDATE", "Camera", updated.id, rest);
       syncCamera(updated.id).catch((e) => console.error("[go2rtc]", e.message));
-      return withStreams(updated);
+      // The registry owns protocol/port/channel: write the change there too, or the next sync reverts it.
+      const portsChanged = before && (before.protocol !== updated.protocol || before.rtspPort !== updated.rtspPort || before.nvrChannel !== updated.nvrChannel);
+      const registrySaved = portsChanged ? await pushCameraPorts(updated.id) : null;
+      return { ...withStreams(updated), registrySaved };
     },
     { body: t.Partial(cameraBody) },
   )

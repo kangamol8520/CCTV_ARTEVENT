@@ -38,6 +38,8 @@ export interface RegistryDevice {
   IPv4_1: string | null; IPv4_2: string | null; Desciption: string | null;
   PurchaseDate: string | null; OutWarranty: string | null; Owner: string | null; OwnerName?: string | null;
   Status1: string | null; Picture1?: string | null; Picture2?: string | null;
+  /** Added 2026-11-11 for CCTV: NVR PoE port of a plug&play camera / RTSP port / stream protocol. */
+  Physical_PORT?: string | null; Network_PORT?: string | null; PROTOCOL?: string | null;
 }
 
 async function floorCodes(): Promise<string[]> {
@@ -49,12 +51,18 @@ async function roomCodes(): Promise<string[]> {
   return rows.map((r) => r.RoomCode);
 }
 
-/** All CCTV cameras in the registry (excludes NVR-* devices). */
-export async function getRegistryCameras(): Promise<RegistryDevice[]> {
+/** Every CCTV-category device in the registry: cameras and NVR-* recorders. */
+export async function getRegistryDevices(): Promise<RegistryDevice[]> {
   const [floors, rooms] = await Promise.all([floorCodes(), roomCodes()]);
   const body = JSON.stringify({ filterJob: [env.registryJobType], filterCate: [env.registryCategory], filterFloor: floors, filterRoom: rooms });
   const rows = await req<RegistryDevice[]>("getdevicemaster", { method: "POST", body });
-  return (Array.isArray(rows) ? rows : []).filter((d) => d.DeviceNo && !/^NVR/i.test(d.DeviceNo));
+  return (Array.isArray(rows) ? rows : []).filter((d) => d.DeviceNo);
+}
+export const isRegistryNvr = (d: { DeviceNo: string }) => /^NVR/i.test(d.DeviceNo);
+
+/** All CCTV cameras in the registry (excludes NVR-* devices). */
+export async function getRegistryCameras(): Promise<RegistryDevice[]> {
+  return (await getRegistryDevices()).filter((d) => !isRegistryNvr(d));
 }
 
 export interface RegistryDetail {
@@ -71,12 +79,58 @@ export async function getRegistryRepairs(registryId: number): Promise<unknown> {
 
 /** Edit a device in the registry. The backend UPDATEs every column, so we send the full record
  *  (current values merged with the patch). We NEVER call the delete endpoint. */
-export async function editRegistryDevice(registryId: number, record: {
+export interface RegistryRecord {
   JobTypeCode: string; CategoryCode: string; DeviceNo: string; FloorCode: string; RoomCode: string;
   PurchaseDate: string; OutWarranty: string; Owner: string; Desciption: string; Status1: string;
   IPv4_1: string; IPv4_2: string;
-}): Promise<unknown> {
-  return req(`edit-device/${registryId}`, { method: "POST", body: JSON.stringify(record) });
+  /** Optional: the backend COALESCEs these, so leaving one out keeps its stored value; "" clears it. */
+  Physical_PORT?: string; Network_PORT?: string; PROTOCOL?: string;
+}
+export async function editRegistryDevice(registryId: number, record: RegistryRecord): Promise<unknown> {
+  const res = await req<{ result?: string }>(`edit-device/${registryId}`, { method: "POST", body: JSON.stringify(record) });
+  if (res?.result !== "ok") throw new Error(`edit-device refused: ${JSON.stringify(res).slice(0, 200)}`);
+  return res;
+}
+
+const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
+const dateStr = (v: unknown) => { const d = v ? new Date(String(v)) : null; return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : ""; };
+
+/** Reads the device's current record, applies `patch` and writes the full record back (edit-device
+ *  rewrites all 12 legacy columns, quoting each value, so NULLs become "" — accepted by the owner). */
+export async function patchRegistryDevice(registryId: number, patch: Partial<RegistryRecord>, fallbackDeviceNo = ""): Promise<RegistryRecord> {
+  const detail = await getRegistryDetail(registryId);
+  const raw = detail.dataDevice as unknown;
+  const cur = ((Array.isArray(raw) ? raw[0] : raw) ?? {}) as Record<string, unknown>;
+  if (!str(cur.DeviceNo) && !fallbackDeviceNo) throw new Error(`registry device ${registryId} not found`);
+  // An empty date would be stored as 1900-01-01 by the backend — refuse rather than corrupt it.
+  if (!dateStr(cur.PurchaseDate) || !dateStr(cur.OutWarranty)) throw new Error("ทะเบียนไม่มีวันที่ซื้อ/หมดประกัน — แก้ในระบบทะเบียนก่อน");
+  const record: RegistryRecord = {
+    JobTypeCode: str(cur.JobTypeCode) || env.registryJobType,
+    CategoryCode: str(cur.CategoryCode) || env.registryCategory,
+    DeviceNo: str(cur.DeviceNo) || fallbackDeviceNo,
+    FloorCode: str(cur.FloorCode),
+    RoomCode: str(cur.RoomCode),
+    PurchaseDate: dateStr(cur.PurchaseDate),
+    OutWarranty: dateStr(cur.OutWarranty),
+    Owner: str(cur.Owner),
+    Desciption: str(cur.Desciption),
+    Status1: str(cur.Status1) || "0",
+    IPv4_1: str(cur.IPv4_1),
+    IPv4_2: str(cur.IPv4_2),
+    ...patch,
+  };
+  // The backend builds SQL by string concatenation for the legacy columns.
+  for (const k of ["JobTypeCode", "CategoryCode", "DeviceNo", "FloorCode", "RoomCode", "Owner", "Desciption", "Status1", "IPv4_1", "IPv4_2"] as const) {
+    if (record[k].includes("'")) throw new Error(`ห้ามใช้เครื่องหมาย ' ใน ${k}`);
+  }
+  await editRegistryDevice(registryId, record);
+  return record;
+}
+
+/** The three CCTV columns as stored in the registry, derived from a camera's own settings. */
+export function cameraPortFields(c: { protocol: string; rtspPort: number; nvrChannel: number | null }) {
+  const plug = c.protocol === "NVR_CHANNEL";
+  return { PROTOCOL: c.protocol, Physical_PORT: plug && c.nvrChannel ? String(c.nvrChannel) : "", Network_PORT: plug ? "" : String(c.rtspPort) };
 }
 
 export interface RepairTicket { BillDoc: string; Status: string; StatusName?: string; JobDate: string; BrokenDes?: string }
