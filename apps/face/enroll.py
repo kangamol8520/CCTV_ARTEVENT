@@ -3,6 +3,9 @@
   .venv/bin/python enroll.py --json ../../data/employees/Emp.json --photos ../../data/employees/photos \
       --out ../../data/face/gallery.npz
 
+With --active (data/employees/active.json from fetch_active.py) only current employees are
+enrolled — people who have left are dropped from the gallery.
+
 Photos used per employee: photos/<basename of PictPath>, else photos/<EmpCode>.<ext>.
 (photos/FP holds fingerprint scans, not faces — never read.)
 """
@@ -58,9 +61,16 @@ def main():
     ap.add_argument("--photos", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--active", default="", help="active.json from fetch_active.py; enroll only these codes")
     a = ap.parse_args()
 
     rows = json.load(open(a.json, encoding="utf-8"))
+    if a.active:
+        active = {str(r["EmpCode"]).strip() for r in json.load(open(a.active, encoding="utf-8"))}
+        before = len(rows)
+        rows = [r for r in rows if str(r["EmpCode"]).strip() in active]
+        missing = sorted(active - {str(r["EmpCode"]).strip() for r in rows})
+        print(f"active filter: {before} → {len(rows)} employees; {len(missing)} active codes not in {os.path.basename(a.json)}: {missing[:20]}")
     by_name = index_photos(a.photos)
     jobs, names = [], {}
     for r in rows:

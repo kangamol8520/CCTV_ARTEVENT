@@ -75,8 +75,16 @@ export async function employees(): Promise<Map<string, Employee>> {
   } catch {
     return new Map();
   }
+  // active.json (fetch_active.py: current staff from the HR API) — when present, people who have
+  // left are hidden from search/corrections. Emp.json remains the full master for names/photos.
+  let active: Set<string> | null = null;
+  const activeFile = join(env.employeesDir, "active.json");
+  try {
+    mtime += (await stat(activeFile)).mtimeMs;
+    active = new Set(((await Bun.file(activeFile).json()) as { EmpCode: string }[]).map((r) => String(r.EmpCode).trim()));
+  } catch {}
   if (cache && cache.mtime === mtime) return cache.byCode;
-  const rows = (await Bun.file(file).json()) as EmpRow[];
+  const rows = ((await Bun.file(file).json()) as EmpRow[]).filter((r) => !active || active.has(String(r.EmpCode).trim()));
   const photosDir = join(env.employeesDir, "photos");
   const names = new Map<string, string>();
   try {

@@ -37,6 +37,7 @@ const STATUS_CLS: Record<Status, string> = {
   UNCERTAIN: "bg-amber-900/30 text-amber-300 ring-amber-700/50",
   UNKNOWN: "bg-ink-800 text-zinc-400 ring-ink-700",
 };
+type Grouped = AccessEvent & { count: number; at: string };
 const fmtTime = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour12: false });
 const localDay = (d: Date) => toLocalInput(d).slice(0, 10);
 
@@ -261,12 +262,38 @@ export function Access() {
     UNKNOWN: all.filter((e) => e.status === "UNKNOWN").length,
   }), [all]);
   const ql = q.trim().toLowerCase();
-  const rows = all.filter((e) => statusF.includes(e.status) && (!ql || e.empCode?.toLowerCase().includes(ql) || e.empName?.toLowerCase().includes(ql)));
+  const filtered = all.filter((e) => statusF.includes(e.status) && (!ql || e.empCode?.toLowerCase().includes(ql) || e.empName?.toLowerCase().includes(ql)));
+
+  /** One time per pass: the same person + same direction within `groupMin` minutes of the previous
+   *  sighting is one passage. IN shows the earliest time, OUT the latest. Unmatched rows stay single. */
+  const [groupMin, setGroupMin] = useState(10);
+  const rows = useMemo(() => {
+    if (!groupMin) return filtered.map((e) => ({ ...e, count: 1, at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt }));
+    const gap = groupMin * 60_000;
+    const asc = [...filtered].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
+    const open = new Map<string, Grouped>();
+    const out: Grouped[] = [];
+    for (const e of asc) {
+      const key = e.status === "MATCHED" && e.empCode ? `${e.empCode}|${e.direction}` : null;
+      const g = key ? open.get(key) : undefined;
+      if (g && new Date(e.firstSeenAt).getTime() - new Date(g.lastSeenAt).getTime() <= gap) {
+        if (e.lastSeenAt > g.lastSeenAt) g.lastSeenAt = e.lastSeenAt;
+        g.count++;
+        if (e.similarity > g.similarity) Object.assign(g, { id: e.id, similarity: e.similarity, margin: e.margin, snapshotUrl: e.snapshotUrl, candidates: e.candidates, deviceNo: e.deviceNo });
+        g.at = g.direction === "IN" ? g.firstSeenAt : g.lastSeenAt;
+        continue;
+      }
+      const n: Grouped = { ...e, count: 1, at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt };
+      out.push(n);
+      if (key) open.set(key, n);
+    }
+    return out.sort((a, b) => b.at.localeCompare(a.at));
+  }, [filtered, groupMin]);
 
   /** First IN / last OUT per employee for the day (confident or corrected matches only). */
   const people = useMemo(() => {
     const m = new Map<string, { code: string; name: string; photoUrl: string | null; firstIn: string | null; lastOut: string | null; ins: number; outs: number }>();
-    for (const e of all) {
+    for (const e of rows) {
       if (e.status !== "MATCHED" || !e.empCode) continue;
       const p = m.get(e.empCode) ?? { code: e.empCode, name: e.empName ?? "", photoUrl: e.photoUrl, firstIn: null, lastOut: null, ins: 0, outs: 0 };
       if (e.direction === "IN") { p.ins++; if (!p.firstIn || e.firstSeenAt < p.firstIn) p.firstIn = e.firstSeenAt; }
@@ -274,9 +301,9 @@ export function Access() {
       m.set(e.empCode, p);
     }
     return [...m.values()].filter((p) => !ql || p.code.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql)).sort((a, b) => (a.firstIn ?? a.lastOut ?? "").localeCompare(b.firstIn ?? b.lastOut ?? ""));
-  }, [all, ql]);
+  }, [rows, ql]);
 
-  const openVideo = (e: AccessEvent) => navigate(`/recordings?cam=${e.cameraId}&t=${new Date(e.firstSeenAt).getTime() - 3000}`);
+  const openVideo = (e: Grouped) => navigate(`/recordings?cam=${e.cameraId}&t=${new Date(e.at).getTime() - 3000}`);
   const toggleStatus = (s: Status) => setStatusF((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
   return (
@@ -314,6 +341,13 @@ export function Access() {
             </button>
           ))}
           <span className="ml-2 text-zinc-500">แสดง {rows.length} รายการ{isToday && " · อัปเดตทุก 15 วินาที"}</span>
+          <label className="ml-auto flex items-center gap-1.5 text-zinc-400">
+            รวมการผ่านของคนเดียวกันภายใน
+            <Select className="!w-24 !py-0.5 text-xs" value={groupMin} onChange={(e) => setGroupMin(Number(e.target.value))}>
+              <option value={0}>ไม่รวม</option><option value={5}>5 นาที</option><option value={10}>10 นาที</option><option value={15}>15 นาที</option>
+            </Select>
+            <span className="text-zinc-600">(เข้า = เวลาแรก, ออก = เวลาสุดท้าย)</span>
+          </label>
         </div>
       )}
 
@@ -330,8 +364,9 @@ export function Access() {
                     <Img src={e.photoUrl} alt="พนักงาน" className="h-28 w-[84px] shrink-0 rounded" />
                     <div className="flex min-w-0 flex-1 flex-col text-xs">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-sm text-cream">{fmtTime(e.firstSeenAt)}</span>
+                        <span className="font-mono text-sm text-cream" title={e.count > 1 ? `${fmtTime(e.firstSeenAt)} – ${fmtTime(e.lastSeenAt)}` : undefined}>{fmtTime(e.at)}</span>
                         <DirBadge d={e.direction} />
+                        {e.count > 1 && <span className="rounded bg-ink-800 px-1 text-[10px] text-zinc-400" title={`${fmtTime(e.firstSeenAt)} – ${fmtTime(e.lastSeenAt)}`}>รวม {e.count} ครั้ง</span>}
                       </div>
                       <div className="truncate text-sm text-cream" title={e.empName ?? ""}>{e.empName ?? (e.status === "UNKNOWN" ? "ไม่ทราบชื่อ" : "-")}</div>
                       <div className="text-zinc-500">{e.empCode ?? ""}</div>
