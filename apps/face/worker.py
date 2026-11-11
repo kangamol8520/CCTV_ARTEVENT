@@ -182,6 +182,113 @@ def poster():
                     return
 
 
+# ── camera person detection as the gate (ONVIF PullPoint) ──────────────────────────────────
+# When the camera's own person detection is on (VIGI: Event → Smart Event → Human Detection, area =
+# our zone), it reports tns1:RuleEngine/PeopleDetector/People true/false. While that subscription is
+# healthy the face detector only runs while the camera sees a person; otherwise the pixel-motion
+# gate is used, so a camera without person detection (or a dropped subscription) still works.
+PEOPLE_HOLD = _cfg("FACE_PEOPLE_HOLD", 2.0)  # keep the gate open this long after the last "true"
+
+
+class PeopleGate(threading.Thread):
+    NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl" '
+          'xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2"')
+
+    def __init__(self, cfg, halt):
+        super().__init__(daemon=True, name=f"people-{cfg['id']}")
+        self.o, self.dev, self.halt = cfg["onvif"], cfg["deviceNo"], halt
+        self.offset = 0.0
+        self.active, self.until, self.ok_at, self.seen, self.true_at = False, 0.0, 0.0, 0, 0.0
+
+    def healthy(self):
+        # Trust the camera only while it demonstrably reports people: the subscription answers AND it
+        # said "person" within the last 30 min. A camera whose person detection got switched off
+        # (e.g. VIGI Face Analysis mode) keeps sending "false" forever — that must not shut us out.
+        now = time.time()
+        return self.seen > 0 and now - self.ok_at < 15 and now - self.true_at < 1800
+
+    def open(self, now):
+        return self.active or now < self.until
+
+    def _sec(self):
+        import base64
+        nonce = os.urandom(16)
+        created = dt.datetime.fromtimestamp(time.time() + self.offset, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        digest = base64.b64encode(hashlib.sha1(nonce + created.encode() + self.o["password"].encode()).digest()).decode()
+        return ('<wsse:Security s:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" '
+                'xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken>'
+                f'<wsse:Username>{self.o["username"]}</wsse:Username>'
+                '<wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">'
+                f'{digest}</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">'
+                f'{base64.b64encode(nonce).decode()}</wsse:Nonce><wsu:Created>{created}</wsu:Created></wsse:UsernameToken></wsse:Security>')
+
+    def _soap(self, url, body, auth=True, timeout=10):
+        env = f'<?xml version="1.0"?><s:Envelope {self.NS}><s:Header>{self._sec() if auth else ""}</s:Header><s:Body>{body}</s:Body></s:Envelope>'
+        req = urllib.request.Request(url, data=env.encode(), method="POST", headers={"Content-Type": "application/soap+xml; charset=utf-8"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "replace")
+
+    @staticmethod
+    def _tag(x, t):
+        import re
+        m = re.search(rf"<(?:[\w]+:)?{t}[^>]*>([\s\S]*?)</(?:[\w]+:)?{t}>", x)
+        return m.group(1) if m else None
+
+    def _subscribe(self):
+        import re
+        dev = f"http://{self.o['host']}:{self.o['port']}/onvif/device_service"
+        t = self._soap(dev, "<tds:GetSystemDateAndTime/>", auth=False)
+        u = self._tag(t, "UTCDateTime")
+        if u:
+            g = lambda k: int(self._tag(u, k))  # noqa: E731
+            cam = dt.datetime(g("Year"), g("Month"), g("Day"), g("Hour"), g("Minute"), g("Second"), tzinfo=dt.timezone.utc).timestamp()
+            self.offset = cam - time.time()
+        caps = self._soap(dev, "<tds:GetCapabilities><tds:Category>Events</tds:Category></tds:GetCapabilities>")
+        ev_url = self._tag(self._tag(caps, "Events") or "", "XAddr")
+        if not ev_url:
+            raise RuntimeError("camera has no ONVIF events service")
+        sub = self._soap(ev_url, "<tev:CreatePullPointSubscription><tev:InitialTerminationTime>PT120S</tev:InitialTerminationTime></tev:CreatePullPointSubscription>")
+        addr = self._tag(self._tag(sub, "SubscriptionReference") or "", "Address")
+        if not addr:
+            raise RuntimeError("subscription refused")
+        return re.sub(r"\s+", "", addr)
+
+    def run(self):
+        import re
+        while not self.halt.is_set() and not STOP.is_set():
+            addr = None
+            try:
+                addr = self._subscribe()
+                started = time.time()
+                while not self.halt.is_set() and not STOP.is_set() and time.time() - started < 100:
+                    x = self._soap(addr, "<tev:PullMessages><tev:Timeout>PT4S</tev:Timeout><tev:MessageLimit>50</tev:MessageLimit></tev:PullMessages>")
+                    self.ok_at = time.time()
+                    for msg in re.findall(r"<(?:[\w]+:)?NotificationMessage>([\s\S]*?)</(?:[\w]+:)?NotificationMessage>", x):
+                        if "PeopleDetector" not in (self._tag(msg, "Topic") or ""):
+                            continue
+                        data = self._tag(msg, "Data") or ""
+                        v = re.search(r'Value="(true|false)"', data, re.I)
+                        if not v:
+                            continue
+                        self.seen += 1
+                        self.active = v.group(1).lower() == "true"
+                        self.until = time.time() + PEOPLE_HOLD
+                        if self.active:
+                            self.true_at = time.time()
+            except Exception as e:
+                if self.seen:
+                    log(f"[{self.dev}] person-detection events: {e}")
+                self.active = False
+                if self.halt.wait(15):
+                    break
+            finally:
+                if addr:
+                    try:
+                        self._soap(addr, "<wsnt:Unsubscribe/>", timeout=5)
+                    except Exception:
+                        pass
+
+
 # ── per-camera pipeline ────────────────────────────────────────────────────────────────────
 def probe_size(url):
     out = subprocess.run(
@@ -201,7 +308,10 @@ class Camera(threading.Thread):
         self.proc = None
         self.frame = None  # (t, img)
         self.cond = threading.Condition()
-        self.stats = {"running": False, "fps": 0.0, "processedFps": 0.0, "busyPct": 0.0, "tracks": 0, "events": 0, "lastError": None}
+        self.stats = {"running": False, "fps": 0.0, "processedFps": 0.0, "busyPct": 0.0, "tracks": 0, "events": 0, "lastError": None, "gate": "motion"}
+        self.people = PeopleGate(cfg, self.halt) if cfg.get("onvif") else None
+        if self.people:
+            self.people.start()
         self.tracks = []
         self.next_id = 0
 
@@ -275,12 +385,20 @@ class Camera(threading.Thread):
                     raise RuntimeError("stream ended")
                 t, img = fr
                 last_t = t
-                # motion gate on a 256-px grey thumbnail
-                small = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(img, (256, max(16, 256 * h // w))), cv2.COLOR_BGR2GRAY), (5, 5), 0)
-                if prev_small is not None and (cv2.absdiff(small, prev_small) > 18).mean() > CFG["motion_ratio"]:
-                    motion_until = t + 1.5
-                prev_small = small
-                if t <= motion_until or self.tracks:
+                if self.people and self.people.healthy():
+                    # the camera's person detection decides (immune to light/shadow changes)
+                    self.stats["gate"] = "camera-person"
+                    go = self.people.open(t)
+                    prev_small = None
+                else:
+                    # motion gate on a 256-px grey thumbnail
+                    self.stats["gate"] = "motion"
+                    small = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(img, (256, max(16, 256 * h // w))), cv2.COLOR_BGR2GRAY), (5, 5), 0)
+                    if prev_small is not None and (cv2.absdiff(small, prev_small) > 18).mean() > CFG["motion_ratio"]:
+                        motion_until = t + 1.5
+                    prev_small = small
+                    go = t <= motion_until
+                if go or self.tracks:
                     s = time.time()
                     self.process(t, img)
                     busy += time.time() - s

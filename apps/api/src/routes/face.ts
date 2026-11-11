@@ -10,6 +10,7 @@ import { authGuard, requireRole } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { badRequest, notFound, HttpError } from "../lib/errors.ts";
 import { env } from "../lib/env.ts";
+import { decryptSecret } from "../lib/crypto.ts";
 import { employees, FACE_STATUS_KEY, faceMediaUrl, safeJoin, verifyFaceMedia, verifyWorker, type FaceWorkerStatus } from "../services/face.ts";
 
 /** A matched person seen again on the same camera within this window extends the same event. */
@@ -59,17 +60,22 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
   .get("/config", async () => {
     const cams = await prisma.camera.findMany({
       where: { faceEnabled: true, isEnabled: true },
-      select: { id: true, deviceNo: true, faceDirection: true, faceZone: true },
+      select: { id: true, deviceNo: true, faceDirection: true, faceZone: true, protocol: true, host: true, httpPort: true, username: true, passwordEnc: true },
     });
     return {
       rtspBase: env.go2rtcRtspUrl,
-      cameras: cams.map((c) => ({
+      cameras: await Promise.all(cams.map(async (c) => ({
         id: c.id,
         deviceNo: c.deviceNo,
         direction: c.faceDirection ?? "IN",
         zone: c.faceZone ? c.faceZone.split(",").map(Number) : null,
         rtsp: `${env.go2rtcRtspUrl}/cam-${c.id}`,
-      })),
+        // ONVIF access for the camera's own person detection (worker gate). Direct-IP cameras only;
+        // this endpoint is worker-token protected and the worker runs on this server.
+        onvif: c.host && c.protocol !== "NVR_CHANNEL" && c.passwordEnc
+          ? { host: c.host, port: c.httpPort, username: c.username ?? "admin", password: await decryptSecret(c.passwordEnc) }
+          : null,
+      }))),
     };
   })
   .put(
