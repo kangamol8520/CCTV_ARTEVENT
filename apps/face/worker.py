@@ -99,8 +99,13 @@ def iso(t):
 
 # ── gallery ─────────────────────────────────────────────────────────────────────────────────
 class Gallery:
+    """gallery.npz (HR photos, built by enroll.py) + learned.npz (faces confirmed by people on the
+    access page, built by learn_from_reviews). Reloaded when either file changes."""
+
     def __init__(self, path):
         self.path, self.mtime, self.lock = path, 0, threading.Lock()
+        self.learned_path = os.path.join(os.path.dirname(path), "learned.npz")
+        self.learned = 0
         self.G = self.inv = self.codes = None
         self.names = {}
         self.loaded_at = None
@@ -111,15 +116,30 @@ class Gallery:
             m = os.path.getmtime(self.path)
         except OSError:
             return
+        try:
+            m += os.path.getmtime(self.learned_path)
+        except OSError:
+            pass
         if m == self.mtime:
             return
         g = np.load(self.path)
-        codes, inv = np.unique(g["code"], return_inverse=True)
+        names = dict(zip(g["names_code"].tolist(), g["names_name"].tolist()))
+        emb, code = g["emb"].astype(np.float32), g["code"]
+        learned = 0
+        try:
+            lg = np.load(self.learned_path)
+            keep = np.isin(lg["code"], list(names))  # only people still in the HR gallery
+            if keep.any():
+                emb = np.concatenate([emb, lg["emb"][keep].astype(np.float32)])
+                code = np.concatenate([code, lg["code"][keep]])
+                learned = int(keep.sum())
+        except (OSError, KeyError, ValueError):
+            pass
+        codes, inv = np.unique(code, return_inverse=True)
         with self.lock:
-            self.G, self.codes, self.inv = g["emb"].astype(np.float32), codes, inv
-            self.names = dict(zip(g["names_code"].tolist(), g["names_name"].tolist()))
+            self.G, self.codes, self.inv, self.names, self.learned = emb, codes, inv, names, learned
             self.mtime, self.loaded_at = m, time.time()
-        log(f"gallery loaded: {len(codes)} employees, {len(self.G)} templates")
+        log(f"gallery loaded: {len(codes)} employees, {len(self.G)} templates ({learned} learned from reviews)")
 
     def top(self, E, k=3):
         """Per-employee max cosine over track frames × that employee's photos → top-k."""
@@ -133,7 +153,7 @@ class Gallery:
     def info(self):
         if self.G is None:
             return None
-        return {"employees": int(len(self.codes)), "templates": int(len(self.G)), "loadedAt": iso(self.loaded_at)}
+        return {"employees": int(len(self.codes)), "templates": int(len(self.G)), "learned": self.learned, "loadedAt": iso(self.loaded_at)}
 
 
 # ── event posting (separate thread so the camera loops never wait on HTTP) ───────────────────
@@ -336,6 +356,9 @@ class Camera(threading.Thread):
             rel = f"events/{day}/{uuid.uuid4().hex}.jpg"
             os.makedirs(os.path.join(CFG["data"], "events", day), exist_ok=True)
             cv2.imwrite(os.path.join(CFG["data"], rel), tr["snap"], [cv2.IMWRITE_JPEG_QUALITY, 88])
+            # The track's face templates, kept next to the crop (same retention): lets a confirmed
+            # event teach the gallery, and lets old events be re-scored after a gallery change.
+            np.save(os.path.join(CFG["data"], rel[:-4] + ".npy"), E.astype(np.float16))
         ev = {
             "cameraId": self.cfg["id"], "status": status,
             "empCode": top[0]["code"] if status != "UNKNOWN" else None,
@@ -364,6 +387,61 @@ class Camera(threading.Thread):
         self.kill()
 
 
+# ── learning from reviews ───────────────────────────────────────────────────────────────────
+LEARN_MAX_PER_EMP = int(os.environ.get("FACE_LEARN_MAX_PER_EMP", 10))
+
+
+def _event_template(rel):
+    """One template for a confirmed event: mean of the track's saved embeddings, or (older events
+    without them) the largest face found in the saved crop. None if no usable face."""
+    base = os.path.join(CFG["data"], rel)
+    try:
+        E = np.load(base[:-4] + ".npy").astype(np.float32)
+        e = E.mean(axis=0)
+    except (OSError, ValueError):
+        img = cv2.imread(base)
+        if img is None:
+            return None
+        faces = [f for f in detect(img, det_size=(320, 320), thresh=CFG["det_thresh"]) if f.bbox[2] - f.bbox[0] >= 24]
+        if not faces:
+            return None
+        f = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        e = embed(img, f)
+    return (e / (np.linalg.norm(e) + 1e-9)).astype(np.float32)
+
+
+def learn_from_reviews():
+    """Rebuilds learned.npz from human-confirmed events (newest LEARN_MAX_PER_EMP per employee).
+    A corrected event is used under its corrected name; re-corrections replace the old template."""
+    rows = api("GET", "/api/face/worker/reviewed", timeout=30)
+    path = os.path.join(CFG["data"], "learned.npz")
+    cache = {}
+    try:
+        old = np.load(path)
+        cache = {(int(i), str(c)): e for i, c, e in zip(old["eid"], old["code"], old["emb"])}
+    except (OSError, KeyError, ValueError):
+        old = None
+    per, eids, codes, embs = {}, [], [], []
+    for r in rows:  # newest first
+        code = str(r["empCode"])
+        if per.get(code, 0) >= LEARN_MAX_PER_EMP:
+            continue
+        key = (int(r["id"]), code)
+        e = cache.get(key)
+        if e is None:
+            e = _event_template(r["snapshotPath"])
+        if e is None:
+            continue
+        per[code] = per.get(code, 0) + 1
+        eids.append(key[0]); codes.append(code); embs.append(e)
+    if old is not None and sorted(zip(old["eid"].tolist(), old["code"].tolist())) == sorted(zip(eids, codes)):
+        return  # nothing new
+    tmp = path[:-4] + ".tmp.npz"
+    np.savez(tmp, eid=np.array(eids, dtype=np.int64), code=np.array(codes), emb=np.array(embs, dtype=np.float32).reshape(-1, 512))
+    os.replace(tmp, path)
+    log(f"learned templates: {len(embs)} from {len(rows)} reviewed events ({len(per)} employees)")
+
+
 # ── housekeeping ───────────────────────────────────────────────────────────────────────────
 def prune_snapshots():
     root = os.path.join(CFG["data"], "events")
@@ -388,6 +466,7 @@ def main():
     cams: dict[int, Camera] = {}
     started = iso(time.time())
     next_cfg = next_status = next_prune = 0.0
+    next_learn = time.time() + 20
     log("face worker started", {k: v for k, v in CFG.items() if k != "api"})
     while not STOP.is_set():
         now = time.time()
@@ -418,6 +497,13 @@ def main():
                 })
             except Exception:
                 pass
+        if now >= next_learn:
+            next_learn = now + 300
+            try:
+                learn_from_reviews()
+                gallery.reload()
+            except Exception as e:
+                log("learning from reviews failed:", e)
         if now >= next_prune:
             next_prune = now + 3600
             prune_snapshots()

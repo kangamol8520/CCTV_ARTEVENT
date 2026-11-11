@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ArrowDownToLine, ArrowUpFromLine, Film, Pencil, RefreshCw, ScanFace, Settings2, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Check, Film, Pencil, RefreshCw, ScanFace, Settings2, X } from "lucide-react";
 import clsx from "clsx";
 import { api, API_URL, getToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -37,7 +37,14 @@ const STATUS_CLS: Record<Status, string> = {
   UNCERTAIN: "bg-amber-900/30 text-amber-300 ring-amber-700/50",
   UNKNOWN: "bg-ink-800 text-zinc-400 ring-ink-700",
 };
-type Grouped = AccessEvent & { count: number; at: string };
+type Grouped = AccessEvent & { count: number; at: string; ids: number[] };
+
+/** Grouping window presets (minutes); any other value is a custom one. Remembered per browser. */
+const GROUP_PRESETS = [0, 5, 10, 15, 30, 60];
+const GROUP_KEY = "access.groupMin";
+const loadGroupMin = () => {
+  try { const v = Number(localStorage.getItem(GROUP_KEY)); return Number.isFinite(v) && v >= 0 && v <= 480 && localStorage.getItem(GROUP_KEY) !== null ? v : 30; } catch { return 30; }
+};
 const fmtTime = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour12: false });
 const localDay = (d: Date) => toLocalInput(d).slice(0, 10);
 
@@ -266,24 +273,28 @@ export function Access() {
 
   /** One time per pass: the same person + same direction within `groupMin` minutes of the previous
    *  sighting is one passage. IN shows the earliest time, OUT the latest. Unmatched rows stay single. */
-  const [groupMin, setGroupMin] = useState(10);
+  const [groupMin, setGroupMinState] = useState(loadGroupMin);
+  const [customGroup, setCustomGroup] = useState(() => !GROUP_PRESETS.includes(loadGroupMin()));
+  const setGroupMin = (v: number) => { setGroupMinState(v); try { localStorage.setItem(GROUP_KEY, String(v)); } catch {} };
   const rows = useMemo(() => {
-    if (!groupMin) return filtered.map((e) => ({ ...e, count: 1, at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt }));
+    if (!groupMin) return filtered.map((e) => ({ ...e, count: 1, ids: [e.id], at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt }));
     const gap = groupMin * 60_000;
     const asc = [...filtered].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
     const open = new Map<string, Grouped>();
     const out: Grouped[] = [];
     for (const e of asc) {
-      const key = e.status === "MATCHED" && e.empCode ? `${e.empCode}|${e.direction}` : null;
+      // "ตรงกัน" rows group with "ตรงกัน", "ไม่แน่ใจ" with "ไม่แน่ใจ" of the same suggested person.
+      const key = e.status !== "UNKNOWN" && e.empCode ? `${e.status}|${e.empCode}|${e.direction}` : null;
       const g = key ? open.get(key) : undefined;
       if (g && new Date(e.firstSeenAt).getTime() - new Date(g.lastSeenAt).getTime() <= gap) {
         if (e.lastSeenAt > g.lastSeenAt) g.lastSeenAt = e.lastSeenAt;
         g.count++;
+        g.ids.push(e.id);
         if (e.similarity > g.similarity) Object.assign(g, { id: e.id, similarity: e.similarity, margin: e.margin, snapshotUrl: e.snapshotUrl, candidates: e.candidates, deviceNo: e.deviceNo });
         g.at = g.direction === "IN" ? g.firstSeenAt : g.lastSeenAt;
         continue;
       }
-      const n: Grouped = { ...e, count: 1, at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt };
+      const n: Grouped = { ...e, count: 1, ids: [e.id], at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt };
       out.push(n);
       if (key) open.set(key, n);
     }
@@ -304,6 +315,15 @@ export function Access() {
   }, [rows, ql]);
 
   const openVideo = (e: Grouped) => navigate(`/recordings?cam=${e.cameraId}&t=${new Date(e.at).getTime() - 3000}`);
+  const qc = useQueryClient();
+  /** One-click "yes, that's the suggested person" for UNCERTAIN rows (all events of a grouped row). */
+  const confirm = useMutation({
+    mutationFn: async (v: { ids: number[]; empCode: string }) => {
+      for (const id of v.ids) await api(`/api/face/events/${id}`, { method: "PATCH", json: { empCode: v.empCode } });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["face", "events"] }),
+    onError: (e) => alert((e as Error).message),
+  });
   const toggleStatus = (s: Status) => setStatusF((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
   return (
@@ -343,9 +363,24 @@ export function Access() {
           <span className="ml-2 text-zinc-500">แสดง {rows.length} รายการ{isToday && " · อัปเดตทุก 15 วินาที"}</span>
           <label className="ml-auto flex items-center gap-1.5 text-zinc-400">
             รวมการผ่านของคนเดียวกันภายใน
-            <Select className="!w-24 !py-0.5 text-xs" value={groupMin} onChange={(e) => setGroupMin(Number(e.target.value))}>
-              <option value={0}>ไม่รวม</option><option value={5}>5 นาที</option><option value={10}>10 นาที</option><option value={15}>15 นาที</option>
+            <Select
+              className="!w-28 !py-0.5 text-xs"
+              value={customGroup ? "custom" : groupMin}
+              onChange={(e) => {
+                if (e.target.value === "custom") { setCustomGroup(true); return; }
+                setCustomGroup(false); setGroupMin(Number(e.target.value));
+              }}
+            >
+              {GROUP_PRESETS.map((m) => <option key={m} value={m}>{m === 0 ? "ไม่รวม" : `${m} นาที`}</option>)}
+              <option value="custom">กำหนดเอง…</option>
             </Select>
+            {customGroup && (
+              <span className="flex items-center gap-1">
+                <Input type="number" min={1} max={480} className="!w-16 !py-0.5 text-xs" value={groupMin || ""}
+                  onChange={(e) => { const v = Math.max(0, Math.min(480, Math.round(Number(e.target.value) || 0))); setGroupMin(v); }} />
+                นาที
+              </span>
+            )}
             <span className="text-zinc-600">(เข้า = เวลาแรก, ออก = เวลาสุดท้าย)</span>
           </label>
         </div>
@@ -376,6 +411,10 @@ export function Access() {
                         <span className="text-zinc-600">{e.deviceNo}</span>
                         <span className="ml-auto flex">
                           {e.recorded && <button className="rounded p-1 text-zinc-400 hover:bg-ink-800 hover:text-cream" title="ดูวิดีโอ" onClick={() => openVideo(e)}><Film size={14} /></button>}
+                          {can("OPERATOR") && e.status === "UNCERTAIN" && e.empCode && (
+                            <button className="rounded p-1 text-emerald-400 hover:bg-ink-800 hover:text-emerald-300 disabled:opacity-40" title={`ยืนยันว่าเป็น ${e.empName ?? e.empCode}${e.count > 1 ? ` (ทั้ง ${e.count} รายการ)` : ""} — ระบบจะจดจำหน้านี้ไว้ช่วยครั้งต่อไป`}
+                              disabled={confirm.isPending} onClick={() => confirm.mutate({ ids: e.ids, empCode: e.empCode! })}><Check size={14} /></button>
+                          )}
                           {can("OPERATOR") && <button className="rounded p-1 text-zinc-400 hover:bg-ink-800 hover:text-cream" title="แก้ไขชื่อ" onClick={() => setEditing(e)}><Pencil size={14} /></button>}
                         </span>
                       </div>

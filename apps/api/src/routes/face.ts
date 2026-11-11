@@ -44,6 +44,18 @@ const workerGuard = new Elysia({ name: "face-worker-guard" }).onBeforeHandle({ a
 
 export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
   .use(workerGuard)
+  /** Human-confirmed events (reviewed + MATCHED) the worker learns extra templates from, so faces
+   *  as this camera sees them (angle, light) are recognised better next time. Newest first. */
+  .get("/reviewed", async () => {
+    const rows = await prisma.accessEvent.findMany({
+      where: { reviewedAt: { not: null }, status: "MATCHED", empCode: { not: null }, snapshotPath: { not: null } },
+      orderBy: { reviewedAt: "desc" },
+      take: 20000,
+      select: { id: true, empCode: true, snapshotPath: true },
+    });
+    const active = await employees();
+    return rows.filter((r) => !active.size || active.has(r.empCode!));
+  })
   .get("/config", async () => {
     const cams = await prisma.camera.findMany({
       where: { faceEnabled: true, isEnabled: true },
@@ -207,7 +219,8 @@ export const faceRoutes = new Elysia({ prefix: "/face" })
         ...r,
         deviceNo: camera.deviceNo,
         recorded: camera.recordEnabled,
-        candidates: (candidates ? (JSON.parse(candidates) as { code: string; name: string; sim: number }[]) : []).map((c) => ({
+        // Hide people who have left since the event was recorded (emps = current staff only).
+        candidates: (candidates ? (JSON.parse(candidates) as { code: string; name: string; sim: number }[]) : []).filter((c) => !emps.size || emps.has(c.code)).map((c) => ({
           ...c,
           photoUrl: emps.get(c.code)?.photo ? faceMediaUrl("emp", c.code) : null,
         })),
