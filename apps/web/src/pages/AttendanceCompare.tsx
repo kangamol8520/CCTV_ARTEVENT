@@ -2,16 +2,16 @@
  * เทียบเวลาเข้างาน — fingerprint scans (ZKTeco, every floor) next to what the entrance cameras saw,
  * one row per employee per day, with flags for the cases people argue about.
  */
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowUpFromLine, Fingerprint, Film, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowDownToLine, ArrowUpFromLine, CloudDownload, Fingerprint, Film, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 import { api, API_URL } from "../lib/api";
 import { Button, Card, Input, PageHeader, toLocalInput } from "../components/ui";
 import { ClipDialog } from "../components/ClipDialog";
 
 interface Scan { at: string; device: string; floor: string | null; clockOffsetSec: number | null }
-interface Pass { at: string; first: string; last: string; direction: "IN" | "OUT"; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null }
+interface Pass { at: string; first: string; last: string; direction: "IN" | "OUT"; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null; byScan?: boolean }
 interface Slot { scan: Scan | null; camera: Pass | null }
 type PeriodKey = "IN" | "BREAK_OUT" | "BREAK_IN" | "OUT";
 interface Person {
@@ -26,6 +26,58 @@ interface Compare {
   periods: { IN: Win; BREAK: Win; OUT: Win }; people: Person[];
 }
 interface Device { id: number; alias: string; ip: string; floor: string | null; records: number | null; clockOffsetSec: number | null; lastPullAt: string | null; lastOkAt: string | null; lastError: string | null; stored: number; lastPunchAt: string | null }
+
+interface PullState {
+  auto: boolean; dailyAt: string; requestedAt: string | null; running: boolean; nextAutoAt: string | null; pullerSeenAt: string | null;
+  lastStartedAt: string | null; lastFinishedAt: string | null; lastReason: "manual" | "auto" | null; lastInserted: number | null; lastFailed: number | null;
+}
+const dt = (s: string) => new Date(s).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+
+/** "ดึงข้อมูลตอนนี้" + optional once-a-day auto pull. The puller on the server polls the API for this. */
+function PullControl({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient();
+  const st = useQuery({
+    queryKey: ["attendance", "pull"], queryFn: () => api<PullState>("/api/attendance/pull"),
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.requestedAt ? 3_000 : 30_000),
+  });
+  const set = (d: PullState) => qc.setQueryData(["attendance", "pull"], d);
+  const now = useMutation({ mutationFn: () => api<PullState>("/api/attendance/pull/now", { method: "POST" }), onSuccess: set });
+  const save = useMutation({ mutationFn: (b: { auto: boolean; dailyAt: string }) => api<PullState>("/api/attendance/pull", { method: "PUT", json: b }), onSuccess: set });
+  const d = st.data;
+  const busy = !!d && (d.running || !!d.requestedAt);
+  const [time, setTime] = useState("");
+  useEffect(() => { if (d && !time) setTime(d.dailyAt); }, [d, time]);
+  // refresh the table when a run finishes
+  const lastFin = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!d) return;
+    if (lastFin.current !== undefined && d.lastFinishedAt !== lastFin.current) onDone();
+    lastFin.current = d.lastFinishedAt;
+  }, [d, onDone]);
+  const offline = !!d && (!d.pullerSeenAt || Date.now() - new Date(d.pullerSeenAt).getTime() > 120_000);
+  const last = d?.lastFinishedAt && (d.lastFailed ?? 0) >= 0
+    ? `ดึงล่าสุด ${dt(d.lastFinishedAt)} (${d.lastReason === "auto" ? "อัตโนมัติ" : "กดเอง"}) · ใหม่ ${d.lastInserted ?? 0} รายการ${d.lastFailed ? ` · เครื่องผิดพลาด ${d.lastFailed}` : ""}`
+    : d?.lastFinishedAt ? `ดึงล่าสุด ${dt(d.lastFinishedAt)} ไม่สำเร็จ` : "ยังไม่เคยดึง";
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button variant="gold" disabled={!d || busy || now.isPending} onClick={() => now.mutate()}
+        title={offline ? "ตัวดึงข้อมูลบนเซิร์ฟเวอร์ไม่ตอบสนอง (pull.py ไม่ได้ทำงาน)" : last}>
+        <CloudDownload size={14} className={clsx(busy && "animate-pulse")} />
+        {d?.running ? "กำลังดึงข้อมูล…" : d?.requestedAt ? "รอตัวดึงข้อมูล…" : "ดึงข้อมูลสแกนตอนนี้"}
+      </Button>
+      <label className="flex items-center gap-1.5 text-zinc-400" title="ดึงข้อมูลจากเครื่องสแกนทุกเครื่องอัตโนมัติวันละครั้งตามเวลาที่เลือก">
+        <input type="checkbox" checked={!!d?.auto} disabled={!d || save.isPending} onChange={(e) => save.mutate({ auto: e.target.checked, dailyAt: time || d!.dailyAt })} />
+        อัตโนมัติทุกวันเวลา
+      </label>
+      <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="!w-28"
+        onBlur={() => { if (d && time && time !== d.dailyAt) save.mutate({ auto: d.auto, dailyAt: time }); }} />
+      <span className={clsx("hidden lg:inline", offline ? "text-red-400" : "text-zinc-500")}>
+        {offline ? "ตัวดึงข้อมูลไม่ทำงาน" : d?.auto && d.nextAutoAt ? `รอบถัดไป ${dt(d.nextAutoAt)}` : last}
+      </span>
+    </div>
+  );
+}
 
 const FLAG: Record<string, { label: string; cls: string; tip: string }> = {
   NO_SCAN_DAY: { label: "กล้องเห็น · ไม่มีสแกนทั้งวัน", cls: "bg-red-900/40 text-red-300 ring-red-800/60", tip: "กล้องจดจำได้ว่าเข้า/ออกอาคาร แต่ไม่มีสแกนนิ้วเลยทั้งวัน" },
@@ -56,7 +108,7 @@ function PassChip({ x, warn, onOpen }: { x: Pass; warn?: boolean; onOpen: (p: Pa
   return (
     <button disabled={!x.recorded} onClick={() => onOpen(x)}
       className={clsx("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs ring-1", warn ? "ring-amber-700/70" : "ring-ink-700", x.recorded && "hover:bg-ink-800")}
-      title={`กล้อง${x.direction === "IN" ? "เห็นเข้า" : "เห็นออก"} ${hms(x.first)}–${hms(x.last)} · ${x.deviceNo}${x.count > 1 ? ` · รวม ${x.count} ครั้ง` : ""}${x.status === "UNCERTAIN" ? " · ไม่แน่ใจ" : ""}${x.recorded ? " · กดเพื่อดูวิดีโอ" : ""}`}>
+      title={`กล้อง${x.direction === "IN" ? "เห็นเข้า" : "เห็นออก"} ${hms(x.first)}–${hms(x.last)} · ${x.deviceNo}${x.count > 1 ? ` · รวม ${x.count} ครั้ง` : ""}${x.status === "UNCERTAIN" ? " · ไม่แน่ใจ" : ""}${x.byScan ? " · ยืนยันด้วยสแกนนิ้ว" : ""}${x.recorded ? " · กดเพื่อดูวิดีโอ" : ""}`}>
       {x.direction === "IN" ? <ArrowDownToLine size={11} className="text-emerald-400" /> : <ArrowUpFromLine size={11} className="text-sky-400" />}
       <span className={clsx("font-mono", x.status === "UNCERTAIN" ? "text-zinc-400" : "text-cream")}>{hm(x.at)}</span>
       {x.recorded && <Film size={10} className="text-zinc-500" />}
@@ -73,6 +125,8 @@ export function AttendanceCompare() {
   const data = useQuery({ queryKey: ["attendance", "compare", day, uncertain], queryFn: () => api<Compare>(`/api/attendance/compare?day=${day}${uncertain ? "&uncertain=1" : ""}`), refetchInterval: 60_000 });
   const devices = useQuery({ queryKey: ["attendance", "devices"], queryFn: () => api<Device[]>("/api/attendance/devices"), refetchInterval: 60_000 });
   const [showDevices, setShowDevices] = useState(false);
+  const { refetch: refetchData } = data, { refetch: refetchDevices } = devices;
+  const refreshAll = useCallback(() => { refetchData(); refetchDevices(); }, [refetchData, refetchDevices]);
 
   const ql = q.trim().toLowerCase();
   const rows = useMemo(() => (data.data?.people ?? []).filter((p) =>
@@ -98,7 +152,8 @@ export function AttendanceCompare() {
         <label className="flex items-center gap-1.5 text-zinc-400" title="นับรายการกล้องสถานะ 'ไม่แน่ใจ' ด้วย (จับคนได้มากขึ้น แต่อาจระบุคนผิดบ้าง)">
           <input type="checkbox" checked={uncertain} onChange={(e) => setUncertain(e.target.checked)} /> รวมกล้อง "ไม่แน่ใจ"
         </label>
-        <Button variant="ghost" onClick={() => { data.refetch(); devices.refetch(); }}><RefreshCw size={13} /></Button>
+        <Button variant="ghost" onClick={refreshAll} title="โหลดตารางใหม่ (ไม่ได้ดึงจากเครื่องสแกน)"><RefreshCw size={13} /></Button>
+        <PullControl onDone={refreshAll} />
         <button onClick={() => setShowDevices((v) => !v)} className="ml-auto flex items-center gap-1.5 text-zinc-400 hover:text-cream">
           <Fingerprint size={14} className={devErr.length ? "text-amber-400" : "text-emerald-400"} />
           เครื่องสแกน {devices.data?.length ?? 0} เครื่อง{devErr.length ? ` · ผิดพลาด ${devErr.length}` : ""}{lastPull && ` · ดึงล่าสุด ${hm(lastPull)}`}

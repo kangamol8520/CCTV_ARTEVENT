@@ -1,7 +1,11 @@
 """Fingerprint scan puller (ZKTeco F18 and compatible), READ ONLY.
 
-  .venv/bin/python -u pull.py            # loop: every ATT_INTERVAL s (default 600)
-  .venv/bin/python -u pull.py --once     # one pass, then exit
+  .venv/bin/python -u pull.py            # wait for the API to say "pull now" (button or daily time)
+  .venv/bin/python -u pull.py --once     # one pass right away, then exit
+
+When to pull is decided by the API (Setting "attendance.pull", page เทียบเวลาเข้างาน): only when
+someone presses "ดึงข้อมูลตอนนี้", or once a day at the chosen time if auto mode is on. This
+process just polls GET /api/attendance/worker/next every ATT_POLL seconds (cheap, no scanner traffic).
 
 For every enabled scanner listed by the API (/api/attendance/worker/devices) it connects over the ZK
 protocol (TCP 4370), downloads the stored scan log and posts the scans newer than what the API already
@@ -44,7 +48,7 @@ _api_env = _env_file(os.path.join(ROOT, "apps/api/.env"))
 API = os.environ.get("ATT_API_URL", "http://127.0.0.1:3000").rstrip("/")
 SECRET = os.environ.get("APP_SECRET") or _api_env.get("APP_SECRET", "")
 TOKEN = hmac.new(SECRET.encode(), b"attendance-worker", hashlib.sha256).hexdigest()
-INTERVAL = int(os.environ.get("ATT_INTERVAL", 600))
+POLL = int(os.environ.get("ATT_POLL", 10))
 # first pull of a device: how far back to import (the device itself keeps months)
 BACKFILL_FROM = dt.datetime.fromisoformat(os.environ.get("ATT_BACKFILL_FROM", "2026-11-01")).replace(tzinfo=TZ)
 # re-send a little overlap so scans written while we were reading are not missed (duplicates are dropped by the API)
@@ -109,33 +113,52 @@ def pull(dev):
         inserted += r.get("inserted", 0)
     log(f"[{dev['alias']} {dev['ip']}] {len(logs)} on device ({took:.1f}s), {len(rows)} since {since.astimezone(TZ):%Y-%m-%d %H:%M}, {inserted} new"
         + (f", clock {info['clockOffsetSec']:+d}s" if "clockOffsetSec" in info else ""))
+    return inserted
 
 
 def one_pass():
     devs = api("GET", "/api/attendance/worker/devices")
+    inserted = failed = 0
     for d in devs:  # one at a time: a scanner serves one connection, ZKTime.Net may be talking to it too
         try:
-            pull(d)
+            inserted += pull(d)
         except Exception as e:
+            failed += 1
             log(f"[{d['alias']} {d['ip']}] failed: {type(e).__name__}: {e}")
             try:
                 api("POST", f"/api/attendance/worker/devices/{d['id']}/error", {"error": f"{type(e).__name__}: {e}"})
             except Exception:
                 pass
+    return inserted, failed
 
 
 def main():
     if not SECRET:
         raise SystemExit("APP_SECRET not found (env or apps/api/.env)")
-    log("attendance puller started", {"api": API, "interval": INTERVAL, "backfillFrom": BACKFILL_FROM.isoformat()})
+    if "--once" in sys.argv:
+        one_pass()
+        return
+    log("attendance puller started (waiting for the API)", {"api": API, "poll": POLL, "backfillFrom": BACKFILL_FROM.isoformat()})
     while True:
         try:
-            one_pass()
+            nxt = api("GET", "/api/attendance/worker/next", timeout=15)
         except Exception as e:
-            log("pass failed:", e)
-        if "--once" in sys.argv:
-            return
-        time.sleep(INTERVAL)
+            log("poll failed:", e)
+            time.sleep(max(POLL, 30))
+            continue
+        if nxt and nxt.get("run"):
+            log(f"pull requested ({nxt.get('reason')})")
+            inserted, failed = 0, -1
+            try:
+                inserted, failed = one_pass()
+            except Exception as e:
+                log("pass failed:", e)
+            log(f"pull done: {inserted} new, " + ("pass failed" if failed < 0 else f"{failed} scanner(s) failed"))
+            try:
+                api("POST", "/api/attendance/worker/finished", {"inserted": inserted, "failed": failed})  # failed -1 = whole pass failed
+            except Exception as e:
+                log("report failed:", e)
+        time.sleep(POLL)
 
 
 if __name__ == "__main__":

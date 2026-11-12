@@ -21,6 +21,8 @@ interface AccessEvent {
   empCode: string | null; empName: string | null; similarity: number; margin: number; candidates: Cand[];
   firstSeenAt: string; lastSeenAt: string; frames: number; faceSize: number;
   snapshotUrl: string | null; photoUrl: string | null; reviewedAt: string | null;
+  /** "SCAN" = promoted from ไม่แน่ใจ because this person scanned a fingerprint right at the pass */
+  confirmedBy?: string | null; scanGapSec?: number | null;
   /** movement during the pass (null for events recorded before 2026-11-11 18:42) */
   travelY: number | null; sizeGrowth: number | null;
 }
@@ -58,9 +60,9 @@ const fmtTime = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour12:
 const hm = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false });
 const dur = (ms: number) => { const m = Math.round(ms / 60000); return m < 60 ? `${m} นาที` : `${Math.floor(m / 60)} ชม. ${m % 60} นาที`; };
 
-/** One stay inside the building: an IN paired with the next OUT. A missing side means that camera
- *  did not recognise the person (common for the exit camera) — shown, never guessed. */
-interface Visit { in: Grouped | null; out: Grouped | null }
+/** One stay inside the building: an IN (entrance camera) paired with the next OUT (exit camera).
+ *  A pass with no partner is listed separately as "unpaired" — never guessed, never counted. */
+interface Visit { in: Grouped; out: Grouped }
 const localDay = (d: Date) => toLocalInput(d).slice(0, 10);
 
 const Img = ({ src, className, alt }: { src: string | null; className?: string; alt: string }) =>
@@ -265,6 +267,7 @@ export function Access() {
   const [statusF, setStatusF] = useState<Status[]>(["MATCHED", "UNCERTAIN"]);
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<"list" | "people">("list");
+  const [peopleF, setPeopleF] = useState<"all" | "complete" | "lone">("all");
   const [editing, setEditing] = useState<AccessEvent | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const isToday = day === localDay(new Date());
@@ -272,9 +275,11 @@ export function Access() {
   const status = useQuery({ queryKey: ["face", "status"], queryFn: () => api<FaceStatus>("/api/face/status"), refetchInterval: 15000 });
   const from = new Date(`${day}T00:00:00`);
   const to = new Date(from.getTime() + 24 * 3600_000);
+  // camera / direction / status filters belong to the list tab: the per-person pairing needs both cameras
+  const qCam = tab === "list" ? cameraId : "", qDir = tab === "list" ? direction : "";
   const events = useQuery({
-    queryKey: ["face", "events", day, cameraId, direction],
-    queryFn: () => api<AccessEvent[]>(`/api/face/events?from=${from.toISOString()}&to=${to.toISOString()}${cameraId ? `&cameraId=${cameraId}` : ""}${direction ? `&direction=${direction}` : ""}`),
+    queryKey: ["face", "events", day, qCam, qDir],
+    queryFn: () => api<AccessEvent[]>(`/api/face/events?from=${from.toISOString()}&to=${to.toISOString()}${qCam ? `&cameraId=${qCam}` : ""}${qDir ? `&direction=${qDir}` : ""}`),
     refetchInterval: isToday ? 15000 : false,
   });
   const all = events.data ?? [];
@@ -284,7 +289,7 @@ export function Access() {
     UNKNOWN: all.filter((e) => e.status === "UNKNOWN").length,
   }), [all]);
   const ql = q.trim().toLowerCase();
-  const filtered = all.filter((e) => statusF.includes(e.status) && (!ql || e.empCode?.toLowerCase().includes(ql) || e.empName?.toLowerCase().includes(ql)));
+  const filtered = all.filter((e) => (tab === "people" || statusF.includes(e.status)) && (!ql || e.empCode?.toLowerCase().includes(ql) || e.empName?.toLowerCase().includes(ql)));
 
   /** One time per pass: the same person + same direction within `groupMin` minutes of the previous
    *  sighting is one passage. IN shows the earliest time, OUT the latest. Unmatched rows stay single. */
@@ -329,33 +334,39 @@ export function Access() {
     const out = [...byEmp.entries()].map(([code, evs]) => {
       evs.sort((a, b) => a.at.localeCompare(b.at));
       const visits: Visit[] = [];
-      let cur: Visit | null = null;
+      const lone: Grouped[] = [];
+      let open: Grouped | null = null;
       for (const e of evs) {
         if (e.direction === "IN") {
-          if (cur) visits.push(cur); // previous IN never got an OUT
-          cur = { in: e, out: null };
-        } else if (cur) {
-          cur.out = e;
-          visits.push(cur);
-          cur = null;
+          if (open) lone.push(open); // previous IN never got an OUT
+          open = e;
+        } else if (open) {
+          visits.push({ in: open, out: e });
+          open = null;
         } else {
-          visits.push({ in: null, out: e }); // left without a recognised entry
+          lone.push(e); // OUT without a recognised IN before it
         }
       }
-      if (cur) visits.push(cur);
-      const inside = visits.reduce((t, v) => t + (v.in && v.out ? new Date(v.out.at).getTime() - new Date(v.in.at).getTime() : 0), 0);
+      if (open) lone.push(open);
+      lone.sort((a, b) => a.at.localeCompare(b.at));
+      const inside = visits.reduce((t, v) => t + new Date(v.out.at).getTime() - new Date(v.in.at).getTime(), 0);
       const first = evs[0]!;
       return {
-        code, name: first.empName ?? "", photoUrl: first.photoUrl, visits, inside,
+        code, name: first.empName ?? "", photoUrl: first.photoUrl, visits, lone, inside,
         firstIn: evs.find((e) => e.direction === "IN")?.at ?? null,
         lastOut: [...evs].reverse().find((e) => e.direction === "OUT")?.at ?? null,
-        complete: visits.filter((v) => v.in && v.out).length,
       };
     });
     return out
       .filter((p) => !ql || p.code.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql))
       .sort((a, b) => (a.firstIn ?? a.lastOut ?? "").localeCompare(b.firstIn ?? b.lastOut ?? ""));
   }, [rows, ql]);
+  const peopleCounts = useMemo(() => ({
+    all: people.length,
+    complete: people.filter((p) => p.visits.length && !p.lone.length).length,
+    lone: people.filter((p) => p.lone.length).length,
+  }), [people]);
+  const shownPeople = people.filter((p) => peopleF === "all" || (peopleF === "complete" ? p.visits.length && !p.lone.length : p.lone.length));
 
   const [clip, setClip] = useState<{ cameraId: number; at: number; title: string } | null>(null);
   const openVideo = (e: Grouped) => setClip({ cameraId: e.cameraId, at: new Date(e.at).getTime(), title: `${e.empName ?? "ไม่ทราบชื่อ"} ${e.empCode ?? ""} · ${e.direction === "IN" ? "เข้า" : "ออก"} ${e.deviceNo}` });
@@ -379,7 +390,7 @@ export function Access() {
 
       <div className="flex flex-wrap items-end gap-2 px-5 pb-3 pt-3">
         <Field label="วันที่"><Input type="date" value={day} onChange={(e) => setDay(e.target.value)} /></Field>
-        <Field label="กล้อง">
+        {tab === "list" && <><Field label="กล้อง">
           <Select className="w-56" value={cameraId} onChange={(e) => setCameraId(e.target.value)}>
             <option value="">ทุกกล้อง</option>
             {status.data?.cameras.map((c) => <option key={c.id} value={c.id}>{c.deviceNo} ({c.faceDirection === "OUT" ? "ออก" : "เข้า"})</option>)}
@@ -389,13 +400,24 @@ export function Access() {
           <Select className="w-28" value={direction} onChange={(e) => setDirection(e.target.value)}>
             <option value="">ทั้งหมด</option><option value="IN">เข้า</option><option value="OUT">ออก</option>
           </Select>
-        </Field>
+        </Field></>}
         <Field label="ค้นหา"><Input className="w-56" value={q} onChange={(e) => setQ(e.target.value)} placeholder="รหัส หรือ ชื่อพนักงาน" /></Field>
         <div className="ml-auto flex overflow-hidden rounded-lg ring-1 ring-ink-700">
           <button onClick={() => setTab("list")} className={clsx("px-3 py-1.5 text-xs", tab === "list" ? "bg-gold-500 text-onaccent" : "text-zinc-400 hover:bg-ink-800")}>รายการ</button>
           <button onClick={() => setTab("people")} className={clsx("px-3 py-1.5 text-xs", tab === "people" ? "bg-gold-500 text-onaccent" : "text-zinc-400 hover:bg-ink-800")}>สรุปรายคน</button>
         </div>
       </div>
+
+      {tab === "people" && (
+        <div className="flex items-center gap-2 px-5 pb-2 text-xs">
+          {([["all", "ทั้งหมด"], ["complete", "จับคู่ครบทุกรอบ"], ["lone", "มีรายการจับคู่ไม่ได้"]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setPeopleF(k)} className={clsx("rounded-full px-2.5 py-0.5 ring-1", peopleF === k ? "bg-gold-500 text-onaccent ring-gold-500" : "text-zinc-400 ring-ink-700 hover:bg-ink-800")}>
+              {l} {peopleCounts[k]}
+            </button>
+          ))}
+          <span className="ml-2 text-zinc-500">เข้า = กล้อง FL1-40 · ออก = กล้อง OD1-30</span>
+        </div>
+      )}
 
       {tab === "list" && (
         <div className="flex items-center gap-2 px-5 pb-2 text-xs">
@@ -452,6 +474,7 @@ export function Access() {
                       <div className="text-zinc-500">{e.empCode ?? ""}</div>
                       <div className="mt-auto flex items-center gap-1.5">
                         <span className={clsx("rounded px-1.5 py-px ring-1", STATUS_CLS[e.status])}>{STATUS_LABEL[e.status]}{e.reviewedAt && " ✓"}</span>
+                        {e.confirmedBy === "SCAN" && !e.reviewedAt && <span className="rounded bg-ink-800 px-1 text-[10px] text-gold-300" title={`ระบบเดาไว้ว่า "ไม่แน่ใจ" แต่คนนี้สแกนนิ้วห่างจากเวลาผ่านกล้อง ${Math.round((e.scanGapSec ?? 0) / 60 * 10) / 10} นาที จึงยืนยันให้อัตโนมัติ`}>ยืนยันด้วยสแกน</span>}
                         <span className="text-zinc-500" title={`ห่างอันดับ 2: ${e.margin.toFixed(2)} · ${e.frames} ภาพ · หน้า ${e.faceSize}px`}>{e.similarity.toFixed(2)}</span>
                         <span className="text-zinc-600">{e.deviceNo}</span>
                         <span className="ml-auto flex">
@@ -474,42 +497,54 @@ export function Access() {
                 <thead className="bg-ink-850 text-left text-xs text-zinc-500">
                   <tr>
                     <th className="px-3 py-2 font-normal" /><th className="font-normal">พนักงาน</th>
-                    <th className="font-normal">เข้า → ออก (แต่ละรอบ)</th>
+                    <th className="font-normal">รอบที่จับคู่ได้ (เข้า → ออก)</th>
+                    <th className="font-normal">จับคู่ไม่ได้</th>
                     <th className="font-normal">เข้าแรก</th><th className="font-normal">ออกสุดท้าย</th>
                     <th className="pr-3 font-normal">อยู่ในอาคารรวม</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {people.map((p) => (
+                  {shownPeople.map((p) => (
                     <tr key={p.code} className="border-t border-ink-800/60 align-top">
                       <td className="w-14 px-3 py-1.5"><Img src={p.photoUrl} alt={p.code} className="h-12 w-9 rounded" /></td>
                       <td className="py-1.5"><div className="text-cream">{p.name}</div><div className="text-xs text-zinc-500">{p.code}</div></td>
                       <td className="py-1.5">
-                        <div className="flex flex-wrap gap-1.5">
-                          {p.visits.map((v, i) => {
-                            return (
-                              <div key={i} className={clsx("rounded-md px-2 py-1 text-xs ring-1", v.in && v.out ? "ring-ink-700" : "ring-amber-800/60")}>
-                                <span className="mr-1 text-zinc-500">#{i + 1}</span>
-                                {v.in ? <button className="font-mono text-emerald-300 hover:underline" title={`เข้า ${fmtTime(v.in.at)} · ${v.in.deviceNo}`} onClick={() => openVideo(v.in!)}>{hm(v.in.at)}</button> : <span className="text-amber-400/80" title="กล้องขาเข้าจดจำไม่ได้">ไม่พบเข้า</span>}
-                                <span className="mx-1 text-zinc-500">→</span>
-                                {v.out ? <button className="font-mono text-sky-300 hover:underline" title={`ออก ${fmtTime(v.out.at)} · ${v.out.deviceNo}`} onClick={() => openVideo(v.out!)}>{hm(v.out.at)}</button> : <span className="text-amber-400/80" title="กล้องขาออกจดจำไม่ได้">ไม่พบออก</span>}
-                                {v.in && v.out && <span className="ml-1 text-zinc-500">({dur(new Date(v.out.at).getTime() - new Date(v.in.at).getTime())})</span>}
+                        {p.visits.length ? (
+                          <div className="flex flex-col gap-0.5 text-xs">
+                            {p.visits.map((v, i) => (
+                              <div key={i} className="flex items-center gap-1">
+                                <button className="font-mono text-emerald-300 hover:underline" title={`เข้า ${fmtTime(v.in.at)} · ${v.in.deviceNo} · ดูวิดีโอ`} onClick={() => openVideo(v.in)}>{hm(v.in.at)}</button>
+                                <span className="text-zinc-600">→</span>
+                                <button className="font-mono text-sky-300 hover:underline" title={`ออก ${fmtTime(v.out.at)} · ${v.out.deviceNo} · ดูวิดีโอ`} onClick={() => openVideo(v.out)}>{hm(v.out.at)}</button>
+                                <span className="text-zinc-500">{dur(new Date(v.out.at).getTime() - new Date(v.in.at).getTime())}</span>
                               </div>
-                            );
-                          })}
-                        </div>
+                            ))}
+                          </div>
+                        ) : <span className="text-xs text-zinc-600">-</span>}
+                      </td>
+                      <td className="py-1.5">
+                        {p.lone.length ? (
+                          <div className="flex max-w-xs flex-wrap gap-x-2 gap-y-0.5 text-xs">
+                            {p.lone.map((e) => (
+                              <button key={e.id} onClick={() => openVideo(e)} className="text-zinc-500 hover:text-cream"
+                                title={`${e.direction === "IN" ? "เห็นเข้า แต่ไม่พบออกที่ตามมา" : "เห็นออก แต่ไม่พบเข้าก่อนหน้า"} · ${fmtTime(e.at)} · ${e.deviceNo} · ดูวิดีโอ`}>
+                                {e.direction === "IN" ? "เข้า" : "ออก"} <span className="font-mono">{hm(e.at)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : <span className="text-xs text-zinc-600">-</span>}
                       </td>
                       <td className="py-1.5 font-mono">{p.firstIn ? hm(p.firstIn) : <span className="text-zinc-600">-</span>}</td>
                       <td className="py-1.5 font-mono">{p.lastOut ? hm(p.lastOut) : <span className="text-zinc-600">-</span>}</td>
-                      <td className="py-1.5 pr-3 text-zinc-300">{p.complete ? dur(p.inside) : <span className="text-zinc-600">-</span>}</td>
+                      <td className="py-1.5 pr-3 text-zinc-300">{p.visits.length ? dur(p.inside) : <span className="text-zinc-600">-</span>}</td>
                     </tr>
                   ))}
-                  {people.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-zinc-500">ยังไม่มีพนักงานที่ระบบจดจำได้แน่ชัดในวันนี้</td></tr>}
+                  {shownPeople.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-zinc-500">ยังไม่มีพนักงานที่ระบบจดจำได้แน่ชัดในวันนี้</td></tr>}
                 </tbody>
               </table>
               <div className="space-y-0.5 border-t border-ink-800 px-3 py-2 text-xs text-zinc-500">
-                <div>จับคู่เวลาเข้ากับเวลาออกถัดไปของคนเดียวกันเป็น 1 รอบ (การผ่านซ้ำภายในช่วง "รวมการผ่าน" นับเป็นครั้งเดียว) · กดที่เวลาเพื่อดูวิดีโอ</div>
-                <div>"ไม่พบเข้า/ไม่พบออก" = กล้องฝั่งนั้นจดจำหน้าไม่ได้ในรอบนั้น · "อยู่ในอาคารรวม" นับเฉพาะรอบที่มีทั้งเข้าและออก · คนที่ยืนอยู่ในกรอบ (ไม่ได้เดินผ่าน) ไม่นับ</div>
+                <div>1 รอบ = เวลาเข้า (กล้อง FL1-40) จับคู่กับเวลาออกถัดไป (กล้อง OD1-30) ของคนเดียวกัน · การผ่านซ้ำภายในช่วง "รวมการผ่าน" นับเป็นครั้งเดียว · กดที่เวลาเพื่อดูวิดีโอ</div>
+                <div>"จับคู่ไม่ได้" = เห็นเข้าแต่ไม่พบออกที่ตามมา หรือเห็นออกแต่ไม่พบเข้าก่อนหน้า (กล้องอีกฝั่งจดจำหน้าไม่ได้) — ไม่นำไปคิดเวลา · "อยู่ในอาคารรวม" นับเฉพาะรอบที่จับคู่ได้ · คนที่ยืนอยู่ในกรอบ (ไม่ได้เดินผ่าน) ไม่นับ</div>
                 <div>นับเฉพาะรายการ "ตรงกัน" (รวมที่ยืนยัน/แก้ไขด้วยมือ) — รายการ "ไม่แน่ใจ" ให้ตรวจในแท็บรายการก่อน</div>
               </div>
             </Card>

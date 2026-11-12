@@ -12,6 +12,8 @@ import { authGuard } from "../lib/auth.ts";
 import { badRequest, HttpError, notFound } from "../lib/errors.ts";
 import { env } from "../lib/env.ts";
 import { employees, faceMediaUrl } from "../services/face.ts";
+import { finishRun, nextRun, publicPullState, requestPull, updatePullSettings } from "../services/attendance-pull.ts";
+import { audit } from "../lib/audit.ts";
 
 /**
  * Shift periods (Bangkok local time, minutes after midnight) used to read a day of scans:
@@ -44,6 +46,10 @@ const guard = new Elysia({ name: "attendance-worker-guard" }).onBeforeHandle({ a
 
 export const attendanceWorkerRoutes = new Elysia({ prefix: "/attendance/worker" })
   .use(guard)
+  /** Puller poll: read the scanners now? (manual button or the daily time) */
+  .get("/next", () => nextRun())
+  .post("/finished", async ({ body }) => { await finishRun(body.inserted, body.failed); return { ok: true }; },
+    { body: t.Object({ inserted: t.Integer(), failed: t.Integer() }) })
   /** Enabled scanners + the newest scan already stored for each (the puller sends only newer ones). */
   .get("/devices", async () => {
     const devs = await prisma.attendanceDevice.findMany({ where: { enabled: true }, orderBy: { alias: "asc" } });
@@ -108,6 +114,14 @@ export const attendanceWorkerRoutes = new Elysia({ prefix: "/attendance/worker" 
 
 export const attendanceRoutes = new Elysia({ prefix: "/attendance" })
   .use(authGuard)
+  /** Pull schedule: manual only, or also automatically once a day at dailyAt (Bangkok). */
+  .get("/pull", () => publicPullState())
+  .put("/pull", async ({ body, user }) => {
+    const r = await updatePullSettings(body.auto, body.dailyAt);
+    await audit(user.id, "ATTENDANCE_PULL_SCHEDULE", "Setting", "attendance.pull", body);
+    return r;
+  }, { body: t.Object({ auto: t.Boolean(), dailyAt: t.String({ pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }) }) })
+  .post("/pull/now", ({ user }) => requestPull(user.displayName ?? user.username))
   .get("/devices", async () => {
     const devs = await prisma.attendanceDevice.findMany({ orderBy: { alias: "asc" } });
     const counts = await prisma.attendancePunch.groupBy({ by: ["deviceId"], _count: true, _max: { punchAt: true } });
@@ -160,7 +174,7 @@ export const attendanceRoutes = new Elysia({ prefix: "/attendance" })
         employees(),
       ]);
       const code = (u: string) => (/^\d{1,3}$/.test(u) ? u.padStart(4, "0") : u);
-      type Pass = { at: Date; first: Date; last: Date; direction: string; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null };
+      type Pass = { at: Date; first: Date; last: Date; direction: string; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null; byScan: boolean };
       const people = new Map<string, { scans: { at: Date; device: string; floor: string | null; clockOffsetSec: number | null }[]; passes: Pass[] }>();
       const get = (c: string) => { let p = people.get(c); if (!p) { p = { scans: [], passes: [] }; people.set(c, p); } return p; };
       for (const s of scans) get(code(s.userId)).scans.push({ at: s.punchAt, device: s.device.alias, floor: s.device.floor, clockOffsetSec: s.device.clockOffsetSec });
@@ -181,6 +195,7 @@ export const attendanceRoutes = new Elysia({ prefix: "/attendance" })
           first: e.firstSeenAt, last: e.lastSeenAt, at: e.direction === "IN" ? e.firstSeenAt : e.lastSeenAt, direction: e.direction, status: e.status,
           cameraId: e.cameraId, deviceNo: e.camera.deviceNo, recorded: e.camera.recordEnabled, count: 1, eventId: e.id,
           snapshotUrl: e.snapshotPath ? faceMediaUrl("snap", e.id) : null,
+          byScan: e.confirmedBy === "SCAN" && !e.reviewedAt,
         };
         get(c).passes.push(n);
         open.set(k, n);

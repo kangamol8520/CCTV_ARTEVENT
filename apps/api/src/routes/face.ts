@@ -52,14 +52,23 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
   /** Human-confirmed events (reviewed + MATCHED) the worker learns extra templates from, so faces
    *  as this camera sees them (angle, light) are recognised better next time. Newest first. */
   .get("/reviewed", async () => {
-    const rows = await prisma.accessEvent.findMany({
+    const sel = { id: true, empCode: true, snapshotPath: true } as const;
+    const human = await prisma.accessEvent.findMany({
       where: { reviewedAt: { not: null }, status: "MATCHED", empCode: { not: null }, snapshotPath: { not: null } },
-      orderBy: { reviewedAt: "desc" },
-      take: 20000,
-      select: { id: true, empCode: true, snapshotPath: true },
+      orderBy: { reviewedAt: "desc" }, take: 20000, select: sel,
+    });
+    // fingerprint-confirmed passes, stricter than the confirmation itself (a wrong template would
+    // teach the wrong face): decent score and the scan within 6 min on the expected side of the pass
+    const byScan = await prisma.accessEvent.findMany({
+      where: {
+        confirmedBy: "SCAN", reviewedAt: null, status: "MATCHED", empCode: { not: null }, snapshotPath: { not: null }, similarity: { gte: 0.42 },
+        OR: [{ direction: "IN", scanGapSec: { gte: 0, lte: 360 } }, { direction: "OUT", scanGapSec: { gte: -360, lte: 0 } }],
+      },
+      orderBy: { firstSeenAt: "desc" }, take: 20000, select: sel,
     });
     const active = await employees();
-    return rows.filter((r) => !active.size || active.has(r.empCode!));
+    // human confirmations first: the worker keeps the first N per employee
+    return [...human, ...byScan].filter((r) => !active.size || active.has(r.empCode!));
   })
   .get("/config", async () => {
     const cams = await prisma.camera.findMany({
@@ -114,13 +123,14 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
         travelY: body.travelY ?? null,
         sizeGrowth: body.sizeGrowth ?? null,
       };
-      // Both cameras see people in both directions. The camera's faceDirection applies to people
-      // walking towards it (face grows, moves down the frame); someone clearly walking away
-      // (moves up towards the door and the face shrinks) is going the other way.
-      const camDir = cam.faceDirection === "OUT" ? "OUT" : "IN";
+      // Direction is locked to the camera: the entrance camera (FL1-40) only gives IN times, the exit
+      // camera (OD1-30) only OUT. Someone walking away from a camera (face shrinks, moves up the frame)
+      // is not used at all — not flipped to the other direction: people passing back and forth would
+      // otherwise become false exits, and a real entry/exit is seen face-on by the other camera.
+      const direction = cam.faceDirection === "OUT" ? "OUT" : "IN";
       const away = body.travelY != null && body.sizeGrowth != null
         && ((body.travelY < -AWAY_TRAVEL && body.sizeGrowth < 1) || body.sizeGrowth < AWAY_SHRINK);
-      const direction = away ? (camDir === "IN" ? "OUT" : "IN") : camDir;
+      if (away) return { id: null, merged: false, skipped: "away", dropSnapshot: body.snapshotPath ?? null };
 
       // Same person lingering / re-detected after a short occlusion → extend the existing event.
       if (body.status === "MATCHED" && body.empCode) {

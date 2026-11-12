@@ -290,6 +290,10 @@ model AccessEvent {
   /// Used to tell a person walking towards the camera from one walking away (direction).
   travelY      Float?
   sizeGrowth   Float?
+  /// "SCAN" when an UNCERTAIN match was promoted to MATCHED because the suggested employee scanned a
+  /// fingerprint right around the pass (services/scan-confirm.ts); scanGapSec = scan time − pass time.
+  confirmedBy  String?  @db.NVarChar(8)
+  scanGapSec   Int?
   /// Set when a person corrects the match in the UI
   reviewedById Int?
   reviewedAt   DateTime?

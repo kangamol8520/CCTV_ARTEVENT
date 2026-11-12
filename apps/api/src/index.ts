@@ -19,6 +19,7 @@ import { recordingMediaRoutes, recordingRoutes } from "./routes/recordings.ts";
 import { faceMediaRoutes, faceRoutes, faceWorkerRoutes } from "./routes/face.ts";
 import { attendanceRoutes, attendanceWorkerRoutes } from "./routes/attendance.ts";
 import { startRegistrySyncScheduler } from "./services/registry-sync.ts";
+import { startScanConfirmScheduler } from "./services/scan-confirm.ts";
 import { syncAllCameras, isReachable } from "./services/go2rtc.ts";
 import { startHealthScheduler } from "./services/health.ts";
 
@@ -75,6 +76,7 @@ if (import.meta.main) {
   }
   startHealthScheduler();
   startRegistrySyncScheduler().catch((e) => console.error("[registry-sync] scheduler", e));
+  startScanConfirmScheduler();
 }
 
 export type App = typeof app;
