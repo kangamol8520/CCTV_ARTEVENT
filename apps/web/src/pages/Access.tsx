@@ -12,6 +12,7 @@ import clsx from "clsx";
 import { api, API_URL, getToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Button, Card, Field, Input, Modal, PageHeader, Select, StatusDot, toLocalInput } from "../components/ui";
+import { ClipDialog } from "../components/ClipDialog";
 
 type Status = "MATCHED" | "UNCERTAIN" | "UNKNOWN";
 interface Cand { code: string; name: string; sim: number; photoUrl: string | null }
@@ -20,7 +21,15 @@ interface AccessEvent {
   empCode: string | null; empName: string | null; similarity: number; margin: number; candidates: Cand[];
   firstSeenAt: string; lastSeenAt: string; frames: number; faceSize: number;
   snapshotUrl: string | null; photoUrl: string | null; reviewedAt: string | null;
+  /** movement during the pass (null for events recorded before 2026-11-11 18:42) */
+  travelY: number | null; sizeGrowth: number | null;
 }
+
+/** Someone standing in the zone (guard post, chatting, waiting) rather than walking through: seen for
+ *  a while but neither moved along the frame nor towards/away from the camera. Kept in the list
+ *  (marked), never counted as an entry or exit. */
+const isStationary = (e: Pick<AccessEvent, "frames" | "travelY" | "sizeGrowth">) =>
+  e.travelY != null && e.sizeGrowth != null && e.frames >= 8 && Math.abs(e.travelY) < 0.04 && e.sizeGrowth > 0.85 && e.sizeGrowth < 1.2;
 interface FaceCam {
   id: number; deviceNo: string; name: string; status: string; faceEnabled: boolean; faceDirection: "IN" | "OUT" | null; faceZone: string | null; recordEnabled: boolean;
   job: { running: boolean; fps: number; processedFps: number; busyPct: number; tracks: number; events: number; lastError: string | null } | null;
@@ -46,6 +55,12 @@ const loadGroupMin = () => {
   try { const v = Number(localStorage.getItem(GROUP_KEY)); return Number.isFinite(v) && v >= 0 && v <= 480 && localStorage.getItem(GROUP_KEY) !== null ? v : 30; } catch { return 30; }
 };
 const fmtTime = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour12: false });
+const hm = (s: string) => new Date(s).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false });
+const dur = (ms: number) => { const m = Math.round(ms / 60000); return m < 60 ? `${m} นาที` : `${Math.floor(m / 60)} ชม. ${m % 60} นาที`; };
+
+/** One stay inside the building: an IN paired with the next OUT. A missing side means that camera
+ *  did not recognise the person (common for the exit camera) — shown, never guessed. */
+interface Visit { in: Grouped | null; out: Grouped | null }
 const localDay = (d: Date) => toLocalInput(d).slice(0, 10);
 
 const Img = ({ src, className, alt }: { src: string | null; className?: string; alt: string }) =>
@@ -284,7 +299,7 @@ export function Access() {
     const out: Grouped[] = [];
     for (const e of asc) {
       // "ตรงกัน" rows group with "ตรงกัน", "ไม่แน่ใจ" with "ไม่แน่ใจ" of the same suggested person.
-      const key = e.status !== "UNKNOWN" && e.empCode ? `${e.status}|${e.empCode}|${e.direction}` : null;
+      const key = e.status !== "UNKNOWN" && e.empCode && !isStationary(e) ? `${e.status}|${e.empCode}|${e.direction}` : null;
       const g = key ? open.get(key) : undefined;
       if (g && new Date(e.firstSeenAt).getTime() - new Date(g.lastSeenAt).getTime() <= gap) {
         if (e.lastSeenAt > g.lastSeenAt) g.lastSeenAt = e.lastSeenAt;
@@ -302,19 +317,48 @@ export function Access() {
   }, [filtered, groupMin]);
 
   /** First IN / last OUT per employee for the day (confident or corrected matches only). */
+  /** Per employee: their passes in time order, paired IN → next OUT into visits. Uses the grouped rows
+   *  (so repeated sightings within the grouping window are already one pass) and only confident or
+   *  hand-confirmed matches. */
   const people = useMemo(() => {
-    const m = new Map<string, { code: string; name: string; photoUrl: string | null; firstIn: string | null; lastOut: string | null; ins: number; outs: number }>();
+    const byEmp = new Map<string, Grouped[]>();
     for (const e of rows) {
-      if (e.status !== "MATCHED" || !e.empCode) continue;
-      const p = m.get(e.empCode) ?? { code: e.empCode, name: e.empName ?? "", photoUrl: e.photoUrl, firstIn: null, lastOut: null, ins: 0, outs: 0 };
-      if (e.direction === "IN") { p.ins++; if (!p.firstIn || e.firstSeenAt < p.firstIn) p.firstIn = e.firstSeenAt; }
-      else { p.outs++; if (!p.lastOut || e.lastSeenAt > p.lastOut) p.lastOut = e.lastSeenAt; }
-      m.set(e.empCode, p);
+      if (e.status !== "MATCHED" || !e.empCode || isStationary(e)) continue;
+      byEmp.set(e.empCode, [...(byEmp.get(e.empCode) ?? []), e]);
     }
-    return [...m.values()].filter((p) => !ql || p.code.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql)).sort((a, b) => (a.firstIn ?? a.lastOut ?? "").localeCompare(b.firstIn ?? b.lastOut ?? ""));
+    const out = [...byEmp.entries()].map(([code, evs]) => {
+      evs.sort((a, b) => a.at.localeCompare(b.at));
+      const visits: Visit[] = [];
+      let cur: Visit | null = null;
+      for (const e of evs) {
+        if (e.direction === "IN") {
+          if (cur) visits.push(cur); // previous IN never got an OUT
+          cur = { in: e, out: null };
+        } else if (cur) {
+          cur.out = e;
+          visits.push(cur);
+          cur = null;
+        } else {
+          visits.push({ in: null, out: e }); // left without a recognised entry
+        }
+      }
+      if (cur) visits.push(cur);
+      const inside = visits.reduce((t, v) => t + (v.in && v.out ? new Date(v.out.at).getTime() - new Date(v.in.at).getTime() : 0), 0);
+      const first = evs[0]!;
+      return {
+        code, name: first.empName ?? "", photoUrl: first.photoUrl, visits, inside,
+        firstIn: evs.find((e) => e.direction === "IN")?.at ?? null,
+        lastOut: [...evs].reverse().find((e) => e.direction === "OUT")?.at ?? null,
+        complete: visits.filter((v) => v.in && v.out).length,
+      };
+    });
+    return out
+      .filter((p) => !ql || p.code.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql))
+      .sort((a, b) => (a.firstIn ?? a.lastOut ?? "").localeCompare(b.firstIn ?? b.lastOut ?? ""));
   }, [rows, ql]);
 
-  const openVideo = (e: Grouped) => navigate(`/recordings?cam=${e.cameraId}&t=${new Date(e.at).getTime() - 3000}`);
+  const [clip, setClip] = useState<{ cameraId: number; at: number; title: string } | null>(null);
+  const openVideo = (e: Grouped) => setClip({ cameraId: e.cameraId, at: new Date(e.at).getTime(), title: `${e.empName ?? "ไม่ทราบชื่อ"} ${e.empCode ?? ""} · ${e.direction === "IN" ? "เข้า" : "ออก"} ${e.deviceNo}` });
   const qc = useQueryClient();
   /** One-click "yes, that's the suggested person" for UNCERTAIN rows (all events of a grouped row). */
   const confirm = useMutation({
@@ -401,6 +445,7 @@ export function Access() {
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono text-sm text-cream" title={e.count > 1 ? `${fmtTime(e.firstSeenAt)} – ${fmtTime(e.lastSeenAt)}` : undefined}>{fmtTime(e.at)}</span>
                         <DirBadge d={e.direction} />
+                        {isStationary(e) && <span className="rounded bg-ink-800 px-1 text-[10px] text-zinc-500" title="ยืนอยู่ในกรอบ ไม่ได้เดินผ่าน — ไม่นับเป็นเข้า/ออก">ยืนอยู่กับที่</span>}
                         {e.count > 1 && <span className="rounded bg-ink-800 px-1 text-[10px] text-zinc-400" title={`${fmtTime(e.firstSeenAt)} – ${fmtTime(e.lastSeenAt)}`}>รวม {e.count} ครั้ง</span>}
                       </div>
                       <div className="truncate text-sm text-cream" title={e.empName ?? ""}>{e.empName ?? (e.status === "UNKNOWN" ? "ไม่ทราบชื่อ" : "-")}</div>
@@ -427,26 +472,51 @@ export function Access() {
             <Card className="overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-ink-850 text-left text-xs text-zinc-500">
-                  <tr><th className="px-3 py-2 font-normal" /><th className="font-normal">พนักงาน</th><th className="font-normal">เข้าครั้งแรก</th><th className="font-normal">ออกครั้งสุดท้าย</th><th className="font-normal">เข้า / ออก (ครั้ง)</th></tr>
+                  <tr>
+                    <th className="px-3 py-2 font-normal" /><th className="font-normal">พนักงาน</th>
+                    <th className="font-normal">เข้า → ออก (แต่ละรอบ)</th>
+                    <th className="font-normal">เข้าแรก</th><th className="font-normal">ออกสุดท้าย</th>
+                    <th className="pr-3 font-normal">อยู่ในอาคารรวม</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {people.map((p) => (
-                    <tr key={p.code} className="border-t border-ink-800/60">
-                      <td className="w-14 px-3 py-1"><Img src={p.photoUrl} alt={p.code} className="h-12 w-9 rounded" /></td>
-                      <td><div className="text-cream">{p.name}</div><div className="text-xs text-zinc-500">{p.code}</div></td>
-                      <td className="font-mono">{p.firstIn ? fmtTime(p.firstIn) : <span className="text-zinc-600">-</span>}</td>
-                      <td className="font-mono">{p.lastOut ? fmtTime(p.lastOut) : <span className="text-zinc-600">-</span>}</td>
-                      <td className="text-zinc-400">{p.ins} / {p.outs}</td>
+                    <tr key={p.code} className="border-t border-ink-800/60 align-top">
+                      <td className="w-14 px-3 py-1.5"><Img src={p.photoUrl} alt={p.code} className="h-12 w-9 rounded" /></td>
+                      <td className="py-1.5"><div className="text-cream">{p.name}</div><div className="text-xs text-zinc-500">{p.code}</div></td>
+                      <td className="py-1.5">
+                        <div className="flex flex-wrap gap-1.5">
+                          {p.visits.map((v, i) => {
+                            return (
+                              <div key={i} className={clsx("rounded-md px-2 py-1 text-xs ring-1", v.in && v.out ? "ring-ink-700" : "ring-amber-800/60")}>
+                                <span className="mr-1 text-zinc-500">#{i + 1}</span>
+                                {v.in ? <button className="font-mono text-emerald-300 hover:underline" title={`เข้า ${fmtTime(v.in.at)} · ${v.in.deviceNo}`} onClick={() => openVideo(v.in!)}>{hm(v.in.at)}</button> : <span className="text-amber-400/80" title="กล้องขาเข้าจดจำไม่ได้">ไม่พบเข้า</span>}
+                                <span className="mx-1 text-zinc-500">→</span>
+                                {v.out ? <button className="font-mono text-sky-300 hover:underline" title={`ออก ${fmtTime(v.out.at)} · ${v.out.deviceNo}`} onClick={() => openVideo(v.out!)}>{hm(v.out.at)}</button> : <span className="text-amber-400/80" title="กล้องขาออกจดจำไม่ได้">ไม่พบออก</span>}
+                                {v.in && v.out && <span className="ml-1 text-zinc-500">({dur(new Date(v.out.at).getTime() - new Date(v.in.at).getTime())})</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td className="py-1.5 font-mono">{p.firstIn ? hm(p.firstIn) : <span className="text-zinc-600">-</span>}</td>
+                      <td className="py-1.5 font-mono">{p.lastOut ? hm(p.lastOut) : <span className="text-zinc-600">-</span>}</td>
+                      <td className="py-1.5 pr-3 text-zinc-300">{p.complete ? dur(p.inside) : <span className="text-zinc-600">-</span>}</td>
                     </tr>
                   ))}
-                  {people.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-zinc-500">ยังไม่มีพนักงานที่ระบบจดจำได้แน่ชัดในวันนี้</td></tr>}
+                  {people.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-zinc-500">ยังไม่มีพนักงานที่ระบบจดจำได้แน่ชัดในวันนี้</td></tr>}
                 </tbody>
               </table>
-              <div className="border-t border-ink-800 px-3 py-2 text-xs text-zinc-500">นับเฉพาะรายการ "ตรงกัน" (รวมที่แก้ไขด้วยมือ) — รายการ "ไม่แน่ใจ" ให้ตรวจและแก้ไขในแท็บรายการก่อน</div>
+              <div className="space-y-0.5 border-t border-ink-800 px-3 py-2 text-xs text-zinc-500">
+                <div>จับคู่เวลาเข้ากับเวลาออกถัดไปของคนเดียวกันเป็น 1 รอบ (การผ่านซ้ำภายในช่วง "รวมการผ่าน" นับเป็นครั้งเดียว) · กดที่เวลาเพื่อดูวิดีโอ</div>
+                <div>"ไม่พบเข้า/ไม่พบออก" = กล้องฝั่งนั้นจดจำหน้าไม่ได้ในรอบนั้น · "อยู่ในอาคารรวม" นับเฉพาะรอบที่มีทั้งเข้าและออก · คนที่ยืนอยู่ในกรอบ (ไม่ได้เดินผ่าน) ไม่นับ</div>
+                <div>นับเฉพาะรายการ "ตรงกัน" (รวมที่ยืนยัน/แก้ไขด้วยมือ) — รายการ "ไม่แน่ใจ" ให้ตรวจในแท็บรายการก่อน</div>
+              </div>
             </Card>
           )}
       </div>
       {editing && <CorrectDialog ev={editing} onClose={() => setEditing(null)} />}
+      {clip && <ClipDialog cameraId={clip.cameraId} at={clip.at} title={clip.title} onClose={() => setClip(null)} />}
     </div>
   );
 }

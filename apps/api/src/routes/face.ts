@@ -15,6 +15,10 @@ import { employees, FACE_STATUS_KEY, faceMediaUrl, safeJoin, verifyFaceMedia, ve
 
 /** A matched person seen again on the same camera within this window extends the same event. */
 const MERGE_MS = 60_000;
+/** "Walking away" thresholds: moved up by more than this fraction of the zone height, or the face
+ *  shrank below this ratio. Env-tunable while the rule is being validated. */
+const AWAY_TRAVEL = Number(process.env.FACE_AWAY_TRAVEL ?? 0.05);
+const AWAY_SHRINK = Number(process.env.FACE_AWAY_SHRINK ?? 0.75);
 const ZONE_RE = /^(0(\.\d+)?|1(\.0+)?),(0(\.\d+)?|1(\.0+)?),(0(\.\d+)?|1(\.0+)?),(0(\.\d+)?|1(\.0+)?)$/;
 
 export const faceMediaRoutes = new Elysia({ prefix: "/face/media" }).get(
@@ -107,12 +111,21 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
         frames: body.frames,
         faceSize: body.faceSize,
         snapshotPath: body.snapshotPath ?? null,
+        travelY: body.travelY ?? null,
+        sizeGrowth: body.sizeGrowth ?? null,
       };
+      // Both cameras see people in both directions. The camera's faceDirection applies to people
+      // walking towards it (face grows, moves down the frame); someone clearly walking away
+      // (moves up towards the door and the face shrinks) is going the other way.
+      const camDir = cam.faceDirection === "OUT" ? "OUT" : "IN";
+      const away = body.travelY != null && body.sizeGrowth != null
+        && ((body.travelY < -AWAY_TRAVEL && body.sizeGrowth < 1) || body.sizeGrowth < AWAY_SHRINK);
+      const direction = away ? (camDir === "IN" ? "OUT" : "IN") : camDir;
 
       // Same person lingering / re-detected after a short occlusion → extend the existing event.
       if (body.status === "MATCHED" && body.empCode) {
         const prev = await prisma.accessEvent.findFirst({
-          where: { cameraId: body.cameraId, empCode: body.empCode, lastSeenAt: { gte: new Date(first.getTime() - MERGE_MS) } },
+          where: { cameraId: body.cameraId, empCode: body.empCode, direction, lastSeenAt: { gte: new Date(first.getTime() - MERGE_MS) } },
           orderBy: { lastSeenAt: "desc" },
         });
         if (prev) {
@@ -130,7 +143,7 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
         }
       }
       const ev = await prisma.accessEvent.create({
-        data: { ...data, cameraId: body.cameraId, direction: cam.faceDirection ?? "IN", firstSeenAt: first, lastSeenAt: last },
+        data: { ...data, cameraId: body.cameraId, direction, firstSeenAt: first, lastSeenAt: last },
         select: { id: true },
       });
       return { id: ev.id, merged: false, dropSnapshot: null };
@@ -149,6 +162,8 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
         frames: t.Integer(),
         faceSize: t.Integer(),
         snapshotPath: t.Optional(t.Nullable(t.String({ maxLength: 400 }))),
+        travelY: t.Optional(t.Nullable(t.Number())),
+        sizeGrowth: t.Optional(t.Nullable(t.Number())),
       }),
     },
   );

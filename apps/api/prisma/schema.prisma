@@ -145,6 +145,11 @@ model Camera {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  /// Fisheye lens calibration for in-browser dewarping: "cx,cy,r,fov" — circle centre and radius as
+  /// fractions of the frame width/height (r of the width) and the lens field of view in degrees.
+  /// Null = normal lens.
+  fisheye        String?   @db.NVarChar(64)
+
   /// Central recording (Phase 2): when true the recorder process writes this camera to disk
   recordEnabled  Boolean   @default(false)
   /// Which go2rtc stream to record: MAIN | SUB
@@ -263,7 +268,8 @@ model AccessEvent {
   id           Int      @id @default(autoincrement())
   cameraId     Int
   camera       Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
-  /// IN | OUT (copied from the camera at the time of the event)
+  /// IN | OUT: the camera's direction for people walking towards it, the opposite for people
+  /// clearly walking away (see travelY / sizeGrowth)
   direction    String   @db.NVarChar(8)
   /// MATCHED (confident) | UNCERTAIN (best guess, needs review) | UNKNOWN
   status       String   @db.NVarChar(16)
@@ -279,6 +285,11 @@ model AccessEvent {
   frames       Int
   faceSize     Int
   snapshotPath String?  @db.NVarChar(400)
+  /// Movement of the face during the pass: vertical travel as a fraction of the zone height
+  /// (+ = down the frame, i.e. towards a ceiling camera) and face-width growth (last/first).
+  /// Used to tell a person walking towards the camera from one walking away (direction).
+  travelY      Float?
+  sizeGrowth   Float?
   /// Set when a person corrects the match in the UI
   reviewedById Int?
   reviewedAt   DateTime?
@@ -287,4 +298,45 @@ model AccessEvent {
   @@index([firstSeenAt])
   @@index([cameraId, firstSeenAt])
   @@index([empCode, firstSeenAt])
+}
+
+/// Fingerprint time-attendance scanner (ZKTeco F18 …), read by apps/attendance/pull.py.
+/// READ ONLY: the puller never clears logs, changes users or settings on the device.
+model AttendanceDevice {
+  id             Int       @id @default(autoincrement())
+  /// Name used in ZKTime.Net, e.g. "1-1" = floor 1, scanner 1
+  alias          String    @db.NVarChar(32)
+  ip             String    @unique @db.NVarChar(64)
+  port           Int       @default(4370)
+  floor          String?   @db.NVarChar(8)
+  enabled        Boolean   @default(true)
+  serial         String?   @db.NVarChar(64)
+  firmware       String?   @db.NVarChar(64)
+  /// logs currently stored on the device
+  records        Int?
+  /// device clock minus server clock, seconds (scanner clocks drift — matters in disputes)
+  clockOffsetSec Int?
+  lastPullAt     DateTime?
+  lastOkAt       DateTime?
+  lastError      String?   @db.NVarChar(500)
+  punches        AttendancePunch[]
+}
+
+/// One fingerprint/card/password scan as stored on the device.
+model AttendancePunch {
+  id        Int              @id @default(autoincrement())
+  deviceId  Int
+  device    AttendanceDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// user id on the scanner (≈ employee code; ZKTime.Net USERINFO.Badgenumber)
+  userId    String           @db.NVarChar(24)
+  /// UTC (the device keeps Bangkok local time; converted by the puller)
+  punchAt   DateTime
+  /// verify type reported by the device (1 = fingerprint …) and its in/out state key
+  status    Int?
+  punch     Int?
+  createdAt DateTime         @default(now())
+
+  @@unique([deviceId, userId, punchAt])
+  @@index([userId, punchAt])
+  @@index([punchAt])
 }

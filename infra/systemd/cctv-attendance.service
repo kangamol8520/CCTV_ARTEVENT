@@ -1,0 +1,15 @@
+[Unit]
+Description=CCTV fingerprint attendance puller (ZKTeco, read only)
+After=network-online.target cctv-api.service
+Wants=network-online.target
+
+[Service]
+User=adminae
+WorkingDirectory=/home/adminae/CCTV/apps/attendance
+ExecStart=/home/adminae/CCTV/apps/attendance/.venv/bin/python -u pull.py
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

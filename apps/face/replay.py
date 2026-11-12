@@ -36,7 +36,7 @@ def main():
                 ev = worker.OUTBOX.get_nowait()
             except queue.Empty:
                 break
-            print(f"  {ev['status']:9} {ev['empCode'] or '-':10} {ev['empName'] or '':30} sim={ev['similarity']:.2f} m={ev['margin']:.2f} frames={ev['frames']} face={ev['faceSize']}px")
+            print(f"  {ev['status']:9} {ev['empCode'] or '-':10} {ev['empName'] or '':30} sim={ev['similarity']:.2f} m={ev['margin']:.2f} frames={ev['frames']} face={ev['faceSize']}px dy={ev.get('travelY')} grow={ev.get('sizeGrowth')}")
 
 
 if __name__ == "__main__":

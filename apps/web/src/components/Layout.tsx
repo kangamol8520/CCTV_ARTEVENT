@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Camera, Film, FolderKanban, HardDrive, History, LayoutDashboard, LayoutGrid, LogOut, Moon, ScanFace, Sun, Video } from "lucide-react";
+import { Activity, Camera, Film, FolderKanban, HardDrive, History, LayoutDashboard, LayoutGrid, LogOut, Moon, ScanFace, Sun, Video, Fingerprint } from "lucide-react";
 import clsx from "clsx";
 import { useAuth } from "../lib/auth";
 import { getTheme, toggleTheme } from "../lib/theme";
@@ -9,9 +9,10 @@ const nav = [
   { to: "/", label: "ภาพรวม", icon: LayoutDashboard, end: true },
   { to: "/live", label: "ดูสด", icon: Video },
   { to: "/layouts", label: "จัดเลย์เอาต์", icon: LayoutGrid },
-  { to: "/playback", label: "ดูย้อนหลัง", icon: History },
-  { to: "/recordings", label: "บันทึกกลาง", icon: Film },
+  { to: "/recordings", label: "ดูย้อนหลัง / Playback", icon: Film },
+  { to: "/playback", label: "ย้อนหลังจาก NVR", icon: History },
   { to: "/access", label: "บันทึกเข้า-ออก", icon: ScanFace },
+  { to: "/attendance", label: "เทียบเวลาเข้างาน", icon: Fingerprint },
   { to: "/events", label: "เหตุการณ์", icon: Activity },
   { to: "/cameras", label: "กล้อง", icon: Camera },
   { to: "/groups", label: "กลุ่มกล้อง", icon: FolderKanban },

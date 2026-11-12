@@ -60,7 +60,7 @@ export const recordingRoutes = new Elysia({ prefix: "/recordings" })
     const alive = !!recorder && Date.now() - new Date(recorder.updatedAt).getTime() < 60_000;
     const cams = await prisma.camera.findMany({
       where: { OR: [{ recordEnabled: true }, { recordings: { some: {} } }] },
-      select: { id: true, deviceNo: true, name: true, status: true, recordEnabled: true, recordStream: true },
+      select: { id: true, deviceNo: true, name: true, status: true, recordEnabled: true, recordStream: true, fisheye: true },
       orderBy: { deviceNo: "asc" },
     });
     const stats = await prisma.recording.groupBy({

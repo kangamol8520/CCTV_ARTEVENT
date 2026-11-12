@@ -13,7 +13,7 @@ import { tcpProbe } from "../services/health.ts";
 const cameraSelect = {
   id: true, deviceNo: true, name: true, description: true, brand: true, model: true, protocol: true, host: true, rtspPort: true, httpPort: true,
   username: true, mainStreamPath: true, subStreamPath: true, nvrId: true, nvrChannel: true, floorId: true, roomId: true, isEnabled: true,
-  status: true, lastSeenAt: true, sortOrder: true, legacyId: true, legacyNvrRef: true, importFlags: true, purchaseDate: true, warrantyEnd: true,
+  status: true, lastSeenAt: true, sortOrder: true, legacyId: true, legacyNvrRef: true, importFlags: true, purchaseDate: true, warrantyEnd: true, fisheye: true,
   createdAt: true, updatedAt: true,
   floor: { select: { id: true, code: true, name: true } },
   room: { select: { id: true, code: true, name: true } },
@@ -46,6 +46,7 @@ const cameraBody = t.Object({
   isEnabled: t.Optional(t.Boolean()),
   sortOrder: t.Optional(t.Integer()),
   importFlags: t.Optional(t.Nullable(t.String())),
+  fisheye: t.Optional(t.Nullable(t.String({ maxLength: 64, pattern: "^[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+$" }))),
 });
 
 export const cameraRoutes = new Elysia({ prefix: "/cameras" })

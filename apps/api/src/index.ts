@@ -17,6 +17,7 @@ import { layoutRoutes } from "./routes/layouts.ts";
 import { registryRoutes } from "./routes/registry.ts";
 import { recordingMediaRoutes, recordingRoutes } from "./routes/recordings.ts";
 import { faceMediaRoutes, faceRoutes, faceWorkerRoutes } from "./routes/face.ts";
+import { attendanceRoutes, attendanceWorkerRoutes } from "./routes/attendance.ts";
 import { startRegistrySyncScheduler } from "./services/registry-sync.ts";
 import { syncAllCameras, isReachable } from "./services/go2rtc.ts";
 import { startHealthScheduler } from "./services/health.ts";
@@ -49,11 +50,22 @@ export const app = new Elysia()
   .get("/", () => ({ name: "cctv-platform-api", version: "0.1.0" }))
   .get("/health", () => ({ ok: true, time: new Date().toISOString() }))
   .group("/api", (g) =>
-    g.use(recordingMediaRoutes).use(faceMediaRoutes).use(faceWorkerRoutes).use(authRoutes).use(locationRoutes).use(nvrRoutes).use(cameraRoutes).use(groupRoutes).use(eventRoutes).use(playbackRoutes).use(reportRoutes).use(systemRoutes).use(layoutRoutes).use(registryRoutes).use(recordingRoutes).use(faceRoutes),
+    g.use(recordingMediaRoutes).use(faceMediaRoutes).use(faceWorkerRoutes).use(attendanceWorkerRoutes).use(authRoutes).use(locationRoutes).use(nvrRoutes).use(cameraRoutes).use(groupRoutes).use(eventRoutes).use(playbackRoutes).use(reportRoutes).use(systemRoutes).use(layoutRoutes).use(registryRoutes).use(recordingRoutes).use(faceRoutes).use(attendanceRoutes),
   );
 
 if (import.meta.main) {
-  await seedAdmin();
+  // At boot the API can start before the MSSQL container accepts connections. Wait for it instead of
+  // crashing: under `bun --watch` a crash leaves the process alive but not listening, so systemd
+  // never restarts it.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await seedAdmin();
+      break;
+    } catch (e) {
+      if (attempt === 1 || attempt % 12 === 0) console.warn(`[api] database not ready (attempt ${attempt}), retrying every 5 s:`, (e as Error).message.split("\n").pop());
+      await Bun.sleep(5000);
+    }
+  }
   app.listen(env.port);
   console.log(`[api] listening on http://localhost:${env.port}  (docs at /docs)`);
   if (await isReachable()) {

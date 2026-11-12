@@ -8,6 +8,8 @@ export interface Camera {
   protocol: "HIKVISION" | "ONVIF" | "RTSP" | "NVR_CHANNEL"; host: string | null; rtspPort: number; httpPort: number; username: string | null;
   mainStreamPath: string | null; subStreamPath: string | null; nvrId: number | null; nvrChannel: number | null; floorId: number | null; roomId: number | null;
   isEnabled: boolean; status: "UNKNOWN" | "ONLINE" | "OFFLINE"; lastSeenAt: string | null; sortOrder: number; importFlags: string | null;
+  /** "cx,cy,r,fov" fisheye calibration (see Camera.fisheye in the schema); null = normal lens */
+  fisheye?: string | null;
   floor: { id: number; code: string; name: string } | null; room: { id: number; code: string; name: string } | null; nvr: { id: number; name: string; host: string } | null;
   streams: { main: string; sub: string; go2rtcUrl: string };
 }

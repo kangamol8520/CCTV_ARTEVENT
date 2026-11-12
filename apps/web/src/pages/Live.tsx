@@ -125,7 +125,7 @@ export function Live() {
               <button onClick={() => setFocus(null)} className="rounded p-1 hover:bg-ink-800"><X size={18} /></button>
             </div>
           </div>
-          <div className="min-h-0 flex-1"><LivePlayer go2rtcUrl={focus.streams.go2rtcUrl} stream={focus.streams.main} /></div>
+          <div className="min-h-0 flex-1"><LivePlayer go2rtcUrl={focus.streams.go2rtcUrl} stream={focus.streams.main} fisheye={focus.fisheye} /></div>
         </div>
       )}
       {registry && <RegistryPanel cameraId={registry.id} deviceNo={registry.deviceNo} onClose={() => setRegistry(null)} />}

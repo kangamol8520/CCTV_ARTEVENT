@@ -16,3 +16,7 @@ registry/*.json
 # Employee personal data (names, face photos) — never commit
 Emp.json
 Employee/
+
+# ZKTime.Net attendance database (staff data) — never commit
+last/
+*.mdb

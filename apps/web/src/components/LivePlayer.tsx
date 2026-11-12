@@ -7,9 +7,10 @@
  *   hidden so the useless live scrubber doesn't appear on hover.
  * - Audio starts muted (browsers require it for autoplay); the speaker button unmutes.
  */
-import { useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Orbit, Volume2, VolumeX } from "lucide-react";
 import clsx from "clsx";
+import { FisheyeView, parseFisheye } from "./FisheyeView";
 
 const loaded = new Map<string, Promise<void>>();
 
@@ -38,10 +39,13 @@ export function wsUrl(go2rtcUrl: string, stream: string) {
   return u.toString();
 }
 
-export function LivePlayer({ go2rtcUrl, stream, mode = "mse,webrtc", className, controls = false, audio = true }: { go2rtcUrl: string; stream: string; mode?: string; className?: string; controls?: boolean; audio?: boolean }) {
+export function LivePlayer({ go2rtcUrl, stream, mode = "mse,webrtc", className, controls = false, audio = true, fisheye }: { go2rtcUrl: string; stream: string; mode?: string; className?: string; controls?: boolean; audio?: boolean; fisheye?: string | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLElement | null>(null);
   const [muted, setMuted] = useState(true);
+  const cal = parseFisheye(fisheye);
+  const [dewarp, setDewarp] = useState(true);
+  const getVideo = useCallback(() => (elRef.current as unknown as { video?: HTMLVideoElement } | null)?.video, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,7 +91,13 @@ export function LivePlayer({ go2rtcUrl, stream, mode = "mse,webrtc", className, 
 
   return (
     <div className={clsx("group relative", className ?? "h-full w-full bg-black", !controls && "lp-hidecontrols")}>
-      <div ref={ref} className="h-full w-full" />
+      <div ref={ref} className={clsx("h-full w-full", cal && dewarp && "invisible")} />
+      {cal && dewarp && <div className="absolute inset-0"><FisheyeView getVideo={getVideo} cal={cal} /></div>}
+      {cal && (
+        <button onClick={(e) => { e.stopPropagation(); setDewarp((d) => !d); }} className="absolute right-1 top-1 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-1 text-xs text-zinc-300 hover:text-gold-300" title={dewarp ? "ดูภาพวงกลมเต็ม (fisheye)" : "หมุนดูภาพอิสระ"}>
+          <Orbit size={14} /> {dewarp ? "ภาพเต็มวง" : "หมุนดูภาพ"}
+        </button>
+      )}
       {audio && !controls && (
         <button onClick={toggleMute} className="absolute bottom-1 left-1 z-10 rounded bg-black/60 p-1 text-zinc-300 opacity-0 transition hover:text-gold-300 group-hover:opacity-100" title={muted ? "เปิดเสียง" : "ปิดเสียง"}>
           {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}

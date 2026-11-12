@@ -120,6 +120,8 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
   const summary: SyncSummary = { registryCount: devices.length, created: 0, updated: 0, ipChanged: 0, disabled: 0, rediscovered: 0, rediscoverFailed: 0, portsChanged: [], errors: [] };
   const toRediscover: number[] = [];
   const toResync = new Set<number>();
+  // Cameras whose PROTOCOL is set in the registry: discovery must not write its own result over it.
+  const registryOwnsProtocol = new Set<number>();
 
   // NVR-* rows: the registry's Network_PORT is the NVR's RTSP port. Matched by DeviceNo, else by IP.
   for (const d of all.filter(isRegistryNvr)) {
@@ -162,6 +164,7 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
         registrySyncedAt: new Date(),
       };
       const ports = cameraPortsFromRegistry(d);
+      if (ports.protocol && cam) registryOwnsProtocol.add(cam.id);
       // Plug&play: IPv4_2 holds the NVR's IP — link the camera to that NVR.
       const nvrId = (ports.protocol ?? cam?.protocol) === "NVR_CHANNEL" ? nvrByHost.get(ipOf(d.IPv4_2) ?? "")?.id : undefined;
 
@@ -214,7 +217,12 @@ export async function syncFromRegistry(opts: { rediscover?: boolean; userId?: nu
       while (i < toRediscover.length) {
         const id = toRediscover[i++]!;
         const r = await applyDiscovery(id, { pws }).catch(() => ({ ok: false }));
-        if (r.ok) { summary.rediscovered++; await pushCameraPorts(id); } else summary.rediscoverFailed++;
+        if (r.ok) {
+          summary.rediscovered++;
+          // Discovery found credentials/paths; keep the registry's protocol if it has one (the next sync
+          // re-applies it), otherwise record what was found.
+          if (!registryOwnsProtocol.has(id)) await pushCameraPorts(id);
+        } else summary.rediscoverFailed++;
       }
     }));
   }

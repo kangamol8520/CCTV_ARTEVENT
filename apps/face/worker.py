@@ -433,6 +433,7 @@ class Camera(threading.Thread):
                 self.tracks.append(best)
             q = bw * float(f.det_score)
             best.update(last_t=t, seen_at=t, cx=cx, cy=cy, w=bw, last_emb=e)
+            best.setdefault("path", []).append((float(cy) / img.shape[0], float(bw)))
             best["frames"] += 1
             best["max_w"] = max(best["max_w"], bw)
             best["embs"].append((q, e))
@@ -477,8 +478,19 @@ class Camera(threading.Thread):
             # The track's face templates, kept next to the crop (same retention): lets a confirmed
             # event teach the gallery, and lets old events be re-scored after a gallery change.
             np.save(os.path.join(CFG["data"], rel[:-4] + ".npy"), E.astype(np.float16))
+        # movement: vertical travel (fraction of zone height, + = down) and face-size growth,
+        # from the average of the first / last 3 sightings
+        path = tr.get("path") or []
+        k = max(1, min(3, len(path) // 2))  # first/last k sightings never overlap
+        travel = growth = None
+        if len(path) >= 2:
+            y0 = sum(p[0] for p in path[:k]) / k
+            y1 = sum(p[0] for p in path[-k:]) / k
+            w0 = sum(p[1] for p in path[:k]) / k
+            w1 = sum(p[1] for p in path[-k:]) / k
+            travel, growth = round(float(y1 - y0), 4), round(float(w1 / max(w0, 1.0)), 4)
         ev = {
-            "cameraId": self.cfg["id"], "status": status,
+            "cameraId": self.cfg["id"], "status": status, "travelY": travel, "sizeGrowth": growth,
             "empCode": top[0]["code"] if status != "UNKNOWN" else None,
             "empName": top[0]["name"] if status != "UNKNOWN" else None,
             "similarity": s1, "margin": round(s1 - s2, 4), "candidates": top,
