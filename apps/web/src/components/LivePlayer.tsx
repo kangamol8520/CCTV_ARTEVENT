@@ -5,12 +5,14 @@
  *
  * - `controls` shows the native seek/transport bar (use it for playback). In live view it is
  *   hidden so the useless live scrubber doesn't appear on hover.
+ * - `zoom` adds digital zoom/pan for normal lenses (fisheye cameras use their own free-look view).
  * - Audio starts muted (browsers require it for autoplay); the speaker button unmutes.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Orbit, Volume2, VolumeX } from "lucide-react";
 import clsx from "clsx";
 import { FisheyeView, parseFisheye } from "./FisheyeView";
+import { ZoomPan } from "./ZoomPan";
 
 const loaded = new Map<string, Promise<void>>();
 
@@ -39,7 +41,7 @@ export function wsUrl(go2rtcUrl: string, stream: string) {
   return u.toString();
 }
 
-export function LivePlayer({ go2rtcUrl, stream, mode = "mse,webrtc", className, controls = false, audio = true, fisheye }: { go2rtcUrl: string; stream: string; mode?: string; className?: string; controls?: boolean; audio?: boolean; fisheye?: string | null }) {
+export function LivePlayer({ go2rtcUrl, stream, mode = "mse,webrtc", className, controls = false, audio = true, fisheye, zoom = false }: { go2rtcUrl: string; stream: string; mode?: string; className?: string; controls?: boolean; audio?: boolean; fisheye?: string | null; zoom?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLElement | null>(null);
   const [muted, setMuted] = useState(true);
@@ -91,7 +93,9 @@ export function LivePlayer({ go2rtcUrl, stream, mode = "mse,webrtc", className, 
 
   return (
     <div className={clsx("group relative", className ?? "h-full w-full bg-black", !controls && "lp-hidecontrols")}>
-      <div ref={ref} className={clsx("h-full w-full", cal && dewarp && "invisible")} />
+      {zoom && !cal
+        ? <ZoomPan><div ref={ref} className="h-full w-full" /></ZoomPan>
+        : <div ref={ref} className={clsx("h-full w-full", cal && dewarp && "invisible")} />}
       {cal && dewarp && <div className="absolute inset-0"><FisheyeView getVideo={getVideo} cal={cal} /></div>}
       {cal && (
         <button onClick={(e) => { e.stopPropagation(); setDewarp((d) => !d); }} className="absolute right-1 top-1 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-1 text-xs text-zinc-300 hover:text-gold-300" title={dewarp ? "ดูภาพวงกลมเต็ม (fisheye)" : "หมุนดูภาพอิสระ"}>
