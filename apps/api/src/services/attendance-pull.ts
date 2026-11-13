@@ -33,6 +33,33 @@ const DEFAULT: PullState = {
 
 let pullerSeenAt: Date | null = null; // last poll from the puller (memory only: "is it alive?")
 
+/** Live progress of the current run (memory only). Percent is weighted by each scanner's stored
+ *  record count from the previous pull, since reading time grows with the log size. */
+interface Progress { total: number; done: number[]; current: { id: number; alias: string } | null; updatedAt: number }
+let progress: Progress | null = null;
+
+export async function reportProgress(p: { total: number; deviceId: number; alias: string; phase: "start" | "done" }) {
+  if (!progress) progress = { total: p.total, done: [], current: null, updatedAt: Date.now() };
+  progress.total = p.total;
+  if (p.phase === "start") progress.current = { id: p.deviceId, alias: p.alias };
+  else { if (!progress.done.includes(p.deviceId)) progress.done.push(p.deviceId); progress.current = null; }
+  progress.updatedAt = Date.now();
+}
+async function progressView() {
+  if (!progress) return null;
+  const devs = await prisma.attendanceDevice.findMany({ where: { enabled: true }, select: { id: true, records: true } });
+  const w = (id: number) => Math.max(1000, devs.find((d) => d.id === id)?.records ?? 1000);
+  const total = devs.reduce((t, d) => t + w(d.id), 0) || 1;
+  const done = progress.done.reduce((t, id) => t + w(id), 0);
+  // half credit for the scanner being read right now so the bar keeps moving
+  const cur = progress.current ? w(progress.current.id) / 2 : 0;
+  return {
+    percent: Math.min(99, Math.round(((done + cur) / total) * 100)),
+    done: progress.done.length, total: progress.total, current: progress.current?.alias ?? null,
+    updatedAt: new Date(progress.updatedAt).toISOString(),
+  };
+}
+
 export async function getPullState(): Promise<PullState> {
   const row = await prisma.setting.findUnique({ where: { key: KEY } }).catch(() => null);
   if (!row) return { ...DEFAULT };
@@ -60,7 +87,8 @@ export async function publicPullState() {
     const slot = todaysSlot(s.dailyAt, now);
     nextAutoAt = (slot > now ? slot : new Date(slot.getTime() + 86_400_000)).toISOString();
   }
-  return { ...s, running: isRunning(s), nextAutoAt, pullerSeenAt: pullerSeenAt?.toISOString() ?? null };
+  const running = isRunning(s);
+  return { ...s, running, nextAutoAt, pullerSeenAt: pullerSeenAt?.toISOString() ?? null, progress: running ? await progressView() : null };
 }
 
 export async function updatePullSettings(auto: boolean, dailyAt: string) {
@@ -95,6 +123,7 @@ export async function nextRun(): Promise<{ run: boolean; reason?: "manual" | "au
   }
   if (!reason) return { run: false };
   s.lastStartedAt = new Date().toISOString();
+  progress = null;
   s.lastReason = reason;
   s.requestedAt = null;
   s.requestedBy = null;
@@ -106,6 +135,7 @@ export async function finishRun(inserted: number, failed: number) {
   const s = await getPullState();
   const prevFinished = s.lastFinishedAt;
   s.lastFinishedAt = new Date().toISOString();
+  progress = null;
   s.lastInserted = inserted;
   s.lastFailed = failed;
   await save(s);

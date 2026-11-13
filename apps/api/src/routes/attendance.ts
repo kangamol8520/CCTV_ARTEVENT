@@ -12,7 +12,7 @@ import { authGuard } from "../lib/auth.ts";
 import { badRequest, HttpError, notFound } from "../lib/errors.ts";
 import { env } from "../lib/env.ts";
 import { employees, faceMediaUrl } from "../services/face.ts";
-import { finishRun, nextRun, publicPullState, requestPull, updatePullSettings } from "../services/attendance-pull.ts";
+import { finishRun, nextRun, reportProgress, publicPullState, requestPull, updatePullSettings } from "../services/attendance-pull.ts";
 import { audit } from "../lib/audit.ts";
 
 /**
@@ -48,6 +48,8 @@ export const attendanceWorkerRoutes = new Elysia({ prefix: "/attendance/worker" 
   .use(guard)
   /** Puller poll: read the scanners now? (manual button or the daily time) */
   .get("/next", () => nextRun())
+  .post("/progress", async ({ body }) => { await reportProgress(body); return { ok: true }; },
+    { body: t.Object({ total: t.Integer(), deviceId: t.Integer(), alias: t.String(), phase: t.Union([t.Literal("start"), t.Literal("done")]) }) })
   .post("/finished", async ({ body }) => { await finishRun(body.inserted, body.failed); return { ok: true }; },
     { body: t.Object({ inserted: t.Integer(), failed: t.Integer() }) })
   /** Enabled scanners + the newest scan already stored for each (the puller sends only newer ones). */
@@ -167,14 +169,14 @@ export const attendanceRoutes = new Elysia({ prefix: "/attendance" })
       const [scans, events, emps] = await Promise.all([
         prisma.attendancePunch.findMany({ where: { punchAt: { gte: from, lt: to } }, orderBy: { punchAt: "asc" }, include: { device: { select: { alias: true, floor: true, clockOffsetSec: true } } } }),
         prisma.accessEvent.findMany({
-          where: { firstSeenAt: { gte: from, lt: to }, status: { in: statuses }, empCode: { not: null } },
+          where: { firstSeenAt: { gte: from, lt: to }, status: { in: statuses }, empCode: { not: null }, direction: { in: ["IN", "OUT"] } },
           orderBy: { firstSeenAt: "asc" },
           include: { camera: { select: { deviceNo: true, recordEnabled: true } } },
         }),
         employees(),
       ]);
       const code = (u: string) => (/^\d{1,3}$/.test(u) ? u.padStart(4, "0") : u);
-      type Pass = { at: Date; first: Date; last: Date; direction: string; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null; byScan: boolean };
+      type Pass = { at: Date; first: Date; last: Date; direction: string; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null; byScan: boolean; byCam: boolean };
       const people = new Map<string, { scans: { at: Date; device: string; floor: string | null; clockOffsetSec: number | null }[]; passes: Pass[] }>();
       const get = (c: string) => { let p = people.get(c); if (!p) { p = { scans: [], passes: [] }; people.set(c, p); } return p; };
       for (const s of scans) get(code(s.userId)).scans.push({ at: s.punchAt, device: s.device.alias, floor: s.device.floor, clockOffsetSec: s.device.clockOffsetSec });
@@ -196,6 +198,7 @@ export const attendanceRoutes = new Elysia({ prefix: "/attendance" })
           cameraId: e.cameraId, deviceNo: e.camera.deviceNo, recorded: e.camera.recordEnabled, count: 1, eventId: e.id,
           snapshotUrl: e.snapshotPath ? faceMediaUrl("snap", e.id) : null,
           byScan: e.confirmedBy === "SCAN" && !e.reviewedAt,
+          byCam: e.confirmedBy === "CAM",
         };
         get(c).passes.push(n);
         open.set(k, n);

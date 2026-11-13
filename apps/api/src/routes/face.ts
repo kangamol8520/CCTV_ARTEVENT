@@ -127,7 +127,9 @@ export const faceWorkerRoutes = new Elysia({ prefix: "/face/worker" })
       // camera (OD1-30) only OUT. Someone walking away from a camera (face shrinks, moves up the frame)
       // is not used at all — not flipped to the other direction: people passing back and forth would
       // otherwise become false exits, and a real entry/exit is seen face-on by the other camera.
-      const direction = cam.faceDirection === "OUT" ? "OUT" : "IN";
+      // CHECK = confirmation camera (FL1-11 at the stairs): its sightings only confirm an IN from the
+      // entrance camera (services/in-check.ts) and never count as an entry on their own.
+      const direction = cam.faceDirection === "OUT" ? "OUT" : cam.faceDirection === "CHECK" ? "CHECK" : "IN";
       const away = body.travelY != null && body.sizeGrowth != null
         && ((body.travelY < -AWAY_TRAVEL && body.sizeGrowth < 1) || body.sizeGrowth < AWAY_SHRINK);
       if (away) return { id: null, merged: false, skipped: "away", dropSnapshot: body.snapshotPath ?? null };
@@ -215,7 +217,7 @@ export const faceRoutes = new Elysia({ prefix: "/face" })
     {
       body: t.Object({
         faceEnabled: t.Optional(t.Boolean()),
-        faceDirection: t.Optional(t.Nullable(t.Union([t.Literal("IN"), t.Literal("OUT")]))),
+        faceDirection: t.Optional(t.Nullable(t.Union([t.Literal("IN"), t.Literal("OUT"), t.Literal("CHECK")]))),
         faceZone: t.Optional(t.Nullable(t.String({ maxLength: 64 }))),
       }),
     },
@@ -237,7 +239,8 @@ export const faceRoutes = new Elysia({ prefix: "/face" })
         where: {
           firstSeenAt: { gte: from, lt: to },
           ...(query.cameraId ? { cameraId: Number(query.cameraId) } : {}),
-          ...(query.direction ? { direction: query.direction } : {}),
+          // confirmation-camera sightings are listed only when that camera (or CHECK) is asked for
+          ...(query.direction ? { direction: query.direction } : query.cameraId ? {} : { direction: { in: ["IN", "OUT"] } }),
           ...(query.status ? { status: { in: query.status.split(",") } } : {}),
           ...(q ? { OR: [{ empCode: { contains: q } }, { empName: { contains: q } }] } : {}),
         },

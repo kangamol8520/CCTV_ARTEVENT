@@ -11,7 +11,7 @@ import { Button, Card, Input, PageHeader, toLocalInput } from "../components/ui"
 import { ClipDialog } from "../components/ClipDialog";
 
 interface Scan { at: string; device: string; floor: string | null; clockOffsetSec: number | null }
-interface Pass { at: string; first: string; last: string; direction: "IN" | "OUT"; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null; byScan?: boolean }
+interface Pass { at: string; first: string; last: string; direction: "IN" | "OUT"; status: string; cameraId: number; deviceNo: string; recorded: boolean; count: number; eventId: number; snapshotUrl: string | null; byScan?: boolean; byCam?: boolean }
 interface Slot { scan: Scan | null; camera: Pass | null }
 type PeriodKey = "IN" | "BREAK_OUT" | "BREAK_IN" | "OUT";
 interface Person {
@@ -30,6 +30,7 @@ interface Device { id: number; alias: string; ip: string; floor: string | null; 
 interface PullState {
   auto: boolean; dailyAt: string; requestedAt: string | null; running: boolean; nextAutoAt: string | null; pullerSeenAt: string | null;
   lastStartedAt: string | null; lastFinishedAt: string | null; lastReason: "manual" | "auto" | null; lastInserted: number | null; lastFailed: number | null;
+  progress: { percent: number; done: number; total: number; current: string | null; updatedAt: string } | null;
 }
 const dt = (s: string) => new Date(s).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
 
@@ -38,7 +39,7 @@ function PullControl({ onDone }: { onDone: () => void }) {
   const qc = useQueryClient();
   const st = useQuery({
     queryKey: ["attendance", "pull"], queryFn: () => api<PullState>("/api/attendance/pull"),
-    refetchInterval: (q) => (q.state.data?.running || q.state.data?.requestedAt ? 3_000 : 30_000),
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.requestedAt ? 1_500 : 30_000),
   });
   const set = (d: PullState) => qc.setQueryData(["attendance", "pull"], d);
   const now = useMutation({ mutationFn: () => api<PullState>("/api/attendance/pull/now", { method: "POST" }), onSuccess: set });
@@ -47,11 +48,18 @@ function PullControl({ onDone }: { onDone: () => void }) {
   const busy = !!d && (d.running || !!d.requestedAt);
   const [time, setTime] = useState("");
   useEffect(() => { if (d && !time) setTime(d.dailyAt); }, [d, time]);
-  // refresh the table when a run finishes
+  // refresh the table when a run finishes; keep the lock up a moment to show the result
   const lastFin = useRef<string | null | undefined>(undefined);
+  const [justDone, setJustDone] = useState(false);
   useEffect(() => {
     if (!d) return;
-    if (lastFin.current !== undefined && d.lastFinishedAt !== lastFin.current) onDone();
+    if (lastFin.current !== undefined && d.lastFinishedAt !== lastFin.current) {
+      onDone();
+      setJustDone(true);
+      const t = setTimeout(() => setJustDone(false), 2500);
+      lastFin.current = d.lastFinishedAt;
+      return () => clearTimeout(t);
+    }
     lastFin.current = d.lastFinishedAt;
   }, [d, onDone]);
   const offline = !!d && (!d.pullerSeenAt || Date.now() - new Date(d.pullerSeenAt).getTime() > 120_000);
@@ -59,8 +67,41 @@ function PullControl({ onDone }: { onDone: () => void }) {
     ? `ดึงล่าสุด ${dt(d.lastFinishedAt)} (${d.lastReason === "auto" ? "อัตโนมัติ" : "กดเอง"}) · ใหม่ ${d.lastInserted ?? 0} รายการ${d.lastFailed ? ` · เครื่องผิดพลาด ${d.lastFailed}` : ""}`
     : d?.lastFinishedAt ? `ดึงล่าสุด ${dt(d.lastFinishedAt)} ไม่สำเร็จ` : "ยังไม่เคยดึง";
 
+  // lock the page while a pull runs (unless the puller is not there to do it)
+  // "ซ่อน" hides the lock until this run finishes (keyed by the previous run's finish time)
+  const [hidden, setHidden] = useState<string | null | undefined>(undefined);
+  const runKey = d?.lastFinishedAt ?? null;
+  const stalled = !!d?.progress && Date.now() - new Date(d.progress.updatedAt).getTime() > 90_000;
+  const lock = (busy && !offline && hidden !== runKey) || justDone;
+  const pct = justDone ? 100 : d?.progress?.percent ?? 0;
+
   return (
     <div className="flex items-center gap-2">
+      {lock && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 backdrop-blur-sm">
+          <div className="w-[26rem] max-w-[92vw] rounded-2xl border border-ink-700 bg-ink-900 p-5 text-sm shadow-2xl">
+            <div className="flex items-center gap-2 font-display font-semibold text-cream">
+              <CloudDownload size={18} className={clsx("text-gold-400", !justDone && "animate-pulse")} />
+              {justDone ? "ดึงข้อมูลสแกนเสร็จแล้ว" : d?.running ? "กำลังดึงข้อมูลจากเครื่องสแกน" : "รอตัวดึงข้อมูลเริ่มทำงาน…"}
+            </div>
+            <div className="mt-4 flex items-end justify-between">
+              <span className="text-xs text-zinc-400">
+                {justDone
+                  ? (d?.lastFailed ?? 0) < 0 ? "ดึงไม่สำเร็จ" : `ได้สแกนใหม่ ${d?.lastInserted ?? 0} รายการ${d?.lastFailed ? ` · เครื่องผิดพลาด ${d.lastFailed}` : ""}`
+                  : d?.progress ? `เครื่อง ${Math.min(d.progress.done + (d.progress.current ? 1 : 0), d.progress.total)}/${d.progress.total}${d.progress.current ? ` · กำลังอ่าน ${d.progress.current}` : ""}` : "กำลังเชื่อมต่อ…"}
+              </span>
+              <span className="font-mono text-2xl text-gold-300">{pct}%</span>
+            </div>
+            <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-ink-800">
+              <div className="h-full rounded-full bg-gold-500 transition-all duration-700" style={{ width: `${pct}%` }} />
+            </div>
+            <div className="mt-3 flex items-center text-xs text-zinc-500">
+              <span>{stalled ? "เครื่องสแกนตอบช้า / ไม่ตอบ — ระบบจะข้ามไปเครื่องถัดไปเอง" : "อ่านทีละเครื่อง เครื่องที่มีประวัติเยอะจะใช้เวลานานกว่า"}</span>
+              {!justDone && <button className="ml-auto shrink-0 rounded px-2 py-1 text-zinc-400 hover:bg-ink-800 hover:text-cream" onClick={() => setHidden(runKey)} title="ปิดหน้าต่างนี้ — ระบบยังดึงข้อมูลต่อเบื้องหลัง">ซ่อน</button>}
+            </div>
+          </div>
+        </div>
+      )}
       <Button variant="gold" disabled={!d || busy || now.isPending} onClick={() => now.mutate()}
         title={offline ? "ตัวดึงข้อมูลบนเซิร์ฟเวอร์ไม่ตอบสนอง (pull.py ไม่ได้ทำงาน)" : last}>
         <CloudDownload size={14} className={clsx(busy && "animate-pulse")} />
@@ -108,7 +149,7 @@ function PassChip({ x, warn, onOpen }: { x: Pass; warn?: boolean; onOpen: (p: Pa
   return (
     <button disabled={!x.recorded} onClick={() => onOpen(x)}
       className={clsx("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs ring-1", warn ? "ring-amber-700/70" : "ring-ink-700", x.recorded && "hover:bg-ink-800")}
-      title={`กล้อง${x.direction === "IN" ? "เห็นเข้า" : "เห็นออก"} ${hms(x.first)}–${hms(x.last)} · ${x.deviceNo}${x.count > 1 ? ` · รวม ${x.count} ครั้ง` : ""}${x.status === "UNCERTAIN" ? " · ไม่แน่ใจ" : ""}${x.byScan ? " · ยืนยันด้วยสแกนนิ้ว" : ""}${x.recorded ? " · กดเพื่อดูวิดีโอ" : ""}`}>
+      title={`กล้อง${x.direction === "IN" ? "เห็นเข้า" : "เห็นออก"} ${hms(x.first)}–${hms(x.last)} · ${x.deviceNo}${x.count > 1 ? ` · รวม ${x.count} ครั้ง` : ""}${x.status === "UNCERTAIN" ? " · ไม่แน่ใจ" : ""}${x.byScan ? " · ยืนยันด้วยสแกนนิ้ว" : ""}${x.byCam ? " · ยืนยันด้วย 2 กล้อง" : ""}${x.recorded ? " · กดเพื่อดูวิดีโอ" : ""}`}>
       {x.direction === "IN" ? <ArrowDownToLine size={11} className="text-emerald-400" /> : <ArrowUpFromLine size={11} className="text-sky-400" />}
       <span className={clsx("font-mono", x.status === "UNCERTAIN" ? "text-zinc-400" : "text-cream")}>{hm(x.at)}</span>
       {x.recorded && <Film size={10} className="text-zinc-500" />}

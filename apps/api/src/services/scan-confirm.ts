@@ -12,6 +12,8 @@
  * window and scores nearly tied) are left UNCERTAIN for a person.
  */
 import { prisma } from "../lib/prisma.ts";
+import { dedupeCrossCamera } from "./cross-camera.ts";
+import { confirmEntriesByCheckCamera } from "./in-check.ts";
 
 const WIN = { IN: [-2 * 60, 10 * 60], OUT: [-10 * 60, 2 * 60] } as const;
 const MIN_SIM = 0.35;
@@ -21,7 +23,7 @@ const code = (u: string) => (/^\d{1,3}$/.test(u) ? u.padStart(4, "0") : u);
 
 export async function confirmByScans(since: Date): Promise<{ checked: number; confirmed: number }> {
   const evs = await prisma.accessEvent.findMany({
-    where: { status: "UNCERTAIN", reviewedAt: null, confirmedBy: null, empCode: { not: null }, similarity: { gte: MIN_SIM }, firstSeenAt: { gte: since } },
+    where: { status: "UNCERTAIN", reviewedAt: null, confirmedBy: null, empCode: { not: null }, similarity: { gte: MIN_SIM }, firstSeenAt: { gte: since }, direction: { in: ["IN", "OUT"] } },
     select: { id: true, empCode: true, direction: true, firstSeenAt: true, lastSeenAt: true, margin: true, candidates: true },
   });
   if (!evs.length) return { checked: 0, confirmed: 0 };
@@ -57,9 +59,23 @@ export async function confirmByScans(since: Date): Promise<{ checked: number; co
 
 let timer: ReturnType<typeof setInterval> | null = null;
 export function startScanConfirmScheduler() {
-  const run = (hours: number) => confirmByScans(new Date(Date.now() - hours * 3600_000))
-    .then((r) => { if (r.confirmed) console.log("[scan-confirm]", r); })
-    .catch((e) => console.error("[scan-confirm]", (e as Error).message));
+  const run = async (hours: number) => {
+    const since = new Date(Date.now() - hours * 3600_000);
+    try {
+      const r = await confirmByScans(since);
+      if (r.confirmed) console.log("[scan-confirm]", r);
+    } catch (e) { console.error("[scan-confirm]", (e as Error).message); }
+    // merge stairs-camera sightings into their entrance IN (before the IN/OUT clean-up below)
+    try {
+      const c = await confirmEntriesByCheckCamera(since);
+      if (c.merged) console.log("[in-check] entries confirmed by the check camera", c);
+    } catch (e) { console.error("[in-check]", (e as Error).message); }
+    // after confirming, so newly MATCHED events are included
+    try {
+      const d = await dedupeCrossCamera(since);
+      if (d.removed) console.log("[cross-camera] removed glance sightings", d);
+    } catch (e) { console.error("[cross-camera]", (e as Error).message); }
+  };
   setTimeout(() => run(24 * 30), 20_000); // back-fill on start
   timer = setInterval(() => run(6), 5 * 60_000);
 }

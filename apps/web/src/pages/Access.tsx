@@ -33,7 +33,7 @@ interface AccessEvent {
 const isStationary = (e: Pick<AccessEvent, "frames" | "travelY" | "sizeGrowth">) =>
   e.travelY != null && e.sizeGrowth != null && e.frames >= 8 && Math.abs(e.travelY) < 0.04 && e.sizeGrowth > 0.85 && e.sizeGrowth < 1.2;
 interface FaceCam {
-  id: number; deviceNo: string; name: string; status: string; faceEnabled: boolean; faceDirection: "IN" | "OUT" | null; faceZone: string | null; recordEnabled: boolean;
+  id: number; deviceNo: string; name: string; status: string; faceEnabled: boolean; faceDirection: "IN" | "OUT" | "CHECK" | null; faceZone: string | null; recordEnabled: boolean;
   job: { running: boolean; fps: number; processedFps: number; busyPct: number; tracks: number; events: number; lastError: string | null } | null;
 }
 interface FaceStatus {
@@ -69,9 +69,11 @@ const Img = ({ src, className, alt }: { src: string | null; className?: string; 
   src ? <img src={API_URL + src} alt={alt} loading="lazy" className={clsx("bg-ink-950 object-cover", className)} />
     : <div className={clsx("grid place-items-center bg-ink-950 text-[10px] text-zinc-600", className)}>ไม่มีรูป</div>;
 
-const DirBadge = ({ d }: { d: "IN" | "OUT" }) => d === "IN"
+const DirBadge = ({ d }: { d: "IN" | "OUT" | "CHECK" }) => d === "IN"
   ? <span className="inline-flex items-center gap-1 text-sky-300"><ArrowDownToLine size={12} /> เข้า</span>
-  : <span className="inline-flex items-center gap-1 text-orange-300"><ArrowUpFromLine size={12} /> ออก</span>;
+  : d === "CHECK"
+    ? <span className="inline-flex items-center gap-1 text-zinc-400" title="กล้องยืนยันขาเข้า — ไม่นับเป็นเวลาเข้าเอง ใช้ยืนยันรายการเข้าของกล้องทางเข้าเท่านั้น"><ArrowDownToLine size={12} /> ยืนยันเข้า</span>
+    : <span className="inline-flex items-center gap-1 text-orange-300"><ArrowUpFromLine size={12} /> ออก</span>;
 
 // ── per-camera settings + zone editor (admin) ──────────────────────────────────────────────
 function ZoneEditor({ cam, onClose }: { cam: FaceCam; onClose: () => void }) {
@@ -145,7 +147,7 @@ function SettingsPanel({ status, isAdmin }: { status: FaceStatus | undefined; is
   const [addId, setAddId] = useState("");
   const allCams = useQuery({ queryKey: ["cameras", "all"], queryFn: () => api<{ id: number; deviceNo: string; name: string; isEnabled: boolean }[]>("/api/cameras"), enabled: isAdmin });
   const patch = useMutation({
-    mutationFn: (v: { id: number; faceEnabled?: boolean; faceDirection?: "IN" | "OUT" }) => api(`/api/face/cameras/${v.id}`, { method: "PATCH", json: { faceEnabled: v.faceEnabled, faceDirection: v.faceDirection } }),
+    mutationFn: (v: { id: number; faceEnabled?: boolean; faceDirection?: "IN" | "OUT" | "CHECK" }) => api(`/api/face/cameras/${v.id}`, { method: "PATCH", json: { faceEnabled: v.faceEnabled, faceDirection: v.faceDirection } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["face", "status"] }),
   });
   const w = status?.worker;
@@ -169,8 +171,8 @@ function SettingsPanel({ status, isAdmin }: { status: FaceStatus | undefined; is
               <td className="py-1"><StatusDot status={c.status} /> <span className="text-cream">{c.deviceNo}</span> <span className="text-zinc-500">{c.name}</span></td>
               <td>
                 {isAdmin ? (
-                  <Select className="!w-24 !py-0.5 text-xs" value={c.faceDirection ?? "IN"} onChange={(e) => patch.mutate({ id: c.id, faceDirection: e.target.value as "IN" | "OUT" })}>
-                    <option value="IN">เข้า</option><option value="OUT">ออก</option>
+                  <Select className="!w-28 !py-0.5 text-xs" value={c.faceDirection ?? "IN"} onChange={(e) => patch.mutate({ id: c.id, faceDirection: e.target.value as "IN" | "OUT" | "CHECK" })}>
+                    <option value="IN">เข้า</option><option value="OUT">ออก</option><option value="CHECK">ยืนยันเข้า</option>
                   </Select>
                 ) : c.faceDirection && <DirBadge d={c.faceDirection} />}
               </td>
@@ -393,7 +395,7 @@ export function Access() {
         {tab === "list" && <><Field label="กล้อง">
           <Select className="w-56" value={cameraId} onChange={(e) => setCameraId(e.target.value)}>
             <option value="">ทุกกล้อง</option>
-            {status.data?.cameras.map((c) => <option key={c.id} value={c.id}>{c.deviceNo} ({c.faceDirection === "OUT" ? "ออก" : "เข้า"})</option>)}
+            {status.data?.cameras.map((c) => <option key={c.id} value={c.id}>{c.deviceNo} ({c.faceDirection === "OUT" ? "ออก" : c.faceDirection === "CHECK" ? "ยืนยันเข้า" : "เข้า"})</option>)}
           </Select>
         </Field>
         <Field label="ทิศทาง">
@@ -415,7 +417,7 @@ export function Access() {
               {l} {peopleCounts[k]}
             </button>
           ))}
-          <span className="ml-2 text-zinc-500">เข้า = กล้อง FL1-40 · ออก = กล้อง OD1-30</span>
+          <span className="ml-2 text-zinc-500">เข้า = กล้อง FL1-40 (ยืนยันด้วย FL1-11 หน้าบันได) · ออก = กล้อง OD1-30</span>
         </div>
       )}
 
@@ -474,6 +476,7 @@ export function Access() {
                       <div className="text-zinc-500">{e.empCode ?? ""}</div>
                       <div className="mt-auto flex items-center gap-1.5">
                         <span className={clsx("rounded px-1.5 py-px ring-1", STATUS_CLS[e.status])}>{STATUS_LABEL[e.status]}{e.reviewedAt && " ✓"}</span>
+                        {e.confirmedBy === "CAM" && <span className="rounded bg-ink-800 px-1 text-[10px] text-emerald-300" title="กล้องหน้าบันได (FL1-11) เห็นคนเดียวกันเดินเข้ามาต่อจากกล้องทางเข้า จึงยืนยันว่าเข้าอาคารจริง">ยืนยันด้วย 2 กล้อง</span>}
                         {e.confirmedBy === "SCAN" && !e.reviewedAt && <span className="rounded bg-ink-800 px-1 text-[10px] text-gold-300" title={`ระบบเดาไว้ว่า "ไม่แน่ใจ" แต่คนนี้สแกนนิ้วห่างจากเวลาผ่านกล้อง ${Math.round((e.scanGapSec ?? 0) / 60 * 10) / 10} นาที จึงยืนยันให้อัตโนมัติ`}>ยืนยันด้วยสแกน</span>}
                         <span className="text-zinc-500" title={`ห่างอันดับ 2: ${e.margin.toFixed(2)} · ${e.frames} ภาพ · หน้า ${e.faceSize}px`}>{e.similarity.toFixed(2)}</span>
                         <span className="text-zinc-600">{e.deviceNo}</span>

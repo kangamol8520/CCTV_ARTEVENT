@@ -119,7 +119,14 @@ def pull(dev):
 def one_pass():
     devs = api("GET", "/api/attendance/worker/devices")
     inserted = failed = 0
+    def progress(d, phase):
+        try:
+            api("POST", "/api/attendance/worker/progress", {"total": len(devs), "deviceId": d["id"], "alias": d["alias"], "phase": phase}, timeout=10)
+        except Exception:
+            pass  # progress is cosmetic
+
     for d in devs:  # one at a time: a scanner serves one connection, ZKTime.Net may be talking to it too
+        progress(d, "start")
         try:
             inserted += pull(d)
         except Exception as e:
@@ -129,6 +136,7 @@ def one_pass():
                 api("POST", f"/api/attendance/worker/devices/{d['id']}/error", {"error": f"{type(e).__name__}: {e}"})
             except Exception:
                 pass
+        progress(d, "done")
     return inserted, failed
 
 

@@ -157,7 +157,7 @@ model Camera {
 
   /// Face entry/exit log (Phase 3): when true the face worker (apps/face/worker.py) watches this camera
   faceEnabled    Boolean   @default(false)
-  /// IN | OUT — which way people walk past this camera
+  /// IN | OUT | CHECK — IN/OUT: entrance/exit camera; CHECK: only confirms an IN (src/services/in-check.ts)
   faceDirection  String?   @db.NVarChar(8)
   /// Detection zone as fractions of the frame "x0,y0,x1,y1" (0..1); null = whole frame
   faceZone       String?   @db.NVarChar(64)
@@ -268,7 +268,7 @@ model AccessEvent {
   id           Int      @id @default(autoincrement())
   cameraId     Int
   camera       Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
-  /// IN | OUT: the camera's direction for people walking towards it, the opposite for people
+  /// IN | OUT | CHECK (confirmation-camera sighting, see in-check.ts) — IN | OUT: the camera's direction for people walking towards it, the opposite for people
   /// clearly walking away (see travelY / sizeGrowth)
   direction    String   @db.NVarChar(8)
   /// MATCHED (confident) | UNCERTAIN (best guess, needs review) | UNKNOWN
